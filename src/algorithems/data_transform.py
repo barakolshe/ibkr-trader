@@ -1,0 +1,45 @@
+import math
+from pandas import DataFrame
+
+from consts.time_consts import BAR_SIZE_SECONDS, HOURS_FROM_START, SECONDS_FROM_END
+from utils.time_utils import hours_to_seconds
+
+
+def get_change_percentage(a: float, b: float) -> float:
+    return ((a / b) - 1) * 100
+
+
+def _get_extremums(df: DataFrame, original_price: float) -> list[float]:
+    extremums: list[float] = [original_price]
+    for _, row in df.iterrows():
+        if row["low"] < original_price and row["low"] < extremums[-1]:
+            if extremums[-1] < original_price:
+                extremums[-1] = row["low"]
+            else:
+                extremums.append(row["low"])
+
+        if row["high"] > original_price and row["high"] > extremums[-1]:
+            if extremums[-1] > original_price:
+                extremums[-1] = row["high"]
+            else:
+                extremums.append(row["high"])
+
+    last = df.iloc[-1]["close"]
+    extremums.append(last)
+    extremums = [
+        get_change_percentage(extremum, original_price) for extremum in extremums
+    ]
+    return extremums[1:]
+
+
+def get_extremums(df: DataFrame) -> list[float]:
+    starting_index = math.floor(
+        (SECONDS_FROM_END - hours_to_seconds(HOURS_FROM_START)) / BAR_SIZE_SECONDS
+    )
+    original_price = df.iloc[starting_index]["close"]
+    sliced_df = df.iloc[starting_index + 1 :]
+    sliced_df.reset_index()
+
+    extremums = _get_extremums(sliced_df, original_price)
+
+    return extremums
