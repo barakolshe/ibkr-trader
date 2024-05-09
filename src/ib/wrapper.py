@@ -1,0 +1,76 @@
+from queue import Queue
+from typing import Any
+import arrow
+from ibapi.contract import Contract
+from pandas import DataFrame
+
+from consts.algorithem_consts import MAX_CASH_VALUE
+from consts.time_consts import (
+    BAR_SIZE_SECONDS,
+    DATETIME_FORMATTING,
+    HOURS_FROM_START,
+    SECONDS_FROM_END,
+    TIMEZONE,
+)
+from ib.app import IBapi  # type: ignore
+from models.evaluation import Evaluation
+from logger.logger import logger
+
+
+def get_historical_data(
+    app: IBapi, evaluation: Evaluation, response_queue: Queue[Any]
+) -> DataFrame:
+    logger.info(f"Getting historical data for evaluation: {evaluation}")
+    contract = Contract()
+    contract.symbol = evaluation.symbol
+    contract.secType = "STK"
+    contract.exchange = "SMART"  # TODO: change this
+    contract.currency = "USD"
+
+    endDate = f"{arrow.get(evaluation.datetime, TIMEZONE).shift(hours=HOURS_FROM_START).format(DATETIME_FORMATTING)} {TIMEZONE}"
+    app.reqHistoricalData(
+        app.nextValidOrderId,
+        contract,
+        endDate,  # end date time
+        f"{SECONDS_FROM_END} S",  # duration
+        f"{BAR_SIZE_SECONDS} secs",  # bar size
+        "MIDPOINT",  # what to show
+        0,  # is regular trading hours
+        1,  # format date
+        False,  # keep up to date
+        [],  # chart options
+    )
+    df: DataFrame = response_queue.get()
+
+    return df
+
+
+def get_account_usd(app: IBapi, response_queue: Queue[Any]) -> float:
+    app.reqAccountSummary(app.nextValidOrderId, "All", "$LEDGER")
+    usd: float = -1
+    response: Any = ""
+    while response is not None:
+        response = response_queue.get()
+        if response is None:
+            break
+        if response[0] == "CashBalance":
+            usd = float(response[1])
+
+    if usd == -1:
+        raise ValueError("Error getting account USD")
+    return min(usd, MAX_CASH_VALUE)
+
+
+def get_current_stock_price(
+    app: IBapi, symbol: str, exchange: str, response_queue: Queue[Any]
+) -> float:
+    contract = Contract()
+    contract.symbol = symbol
+    contract.secType = "STK"
+    contract.exchange = exchange
+    contract.currency = "USD"
+    app.reqMktData(app.nextValidOrderId, contract, "", True, False, [])
+    value = -1
+    for _ in range(0, 3):
+        value = response_queue.get()
+    return value

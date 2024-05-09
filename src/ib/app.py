@@ -1,4 +1,5 @@
 # type: ignore
+from decimal import Decimal
 import logging
 from queue import Queue
 from typing import Any
@@ -7,6 +8,10 @@ from ibapi.wrapper import EWrapper
 from ibapi.utils import current_fn_name
 import pandas as pd
 import arrow
+from ibapi.order import Order
+from ibapi.contract import Contract
+from ibapi.common import TickAttrib, TickerId
+from ibapi.ticktype import TickType
 
 from consts.time_consts import AWARE_DATETIME_FORMATTING
 from logger.logger import logger
@@ -18,8 +23,12 @@ class IBapi(EWrapper, EClient):  # type: ignore
         self.data = []
         self.df = None
         self.queue = queue
+        self.nextValidOrderId = 0
 
     # Logging
+
+    def insert_to_queue(self, data: Any) -> None:
+        self.queue.put(data)
 
     def logAnswer(self, fnName, fnParams):
         if logger.isEnabledFor(logging.INFO):
@@ -40,7 +49,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
         """This event is called when there is an error with the
         communication or when TWS wants to send a message to the client."""
         if reqId != -1:
-            self.queue.put(None)
+            self.insert_to_queue(None)
         self.logAnswer(current_fn_name(), vars())
         if advancedOrderRejectJson:
             logger.error(
@@ -65,9 +74,61 @@ class IBapi(EWrapper, EClient):  # type: ignore
         logger.info(f"HistoricalDataEnd. ReqId: {reqId}, from: {start}, to: {end}")
         self.df = pd.DataFrame(self.data)
         self.df.set_index("date", inplace=True)
-        self.queue.put(self.df)
+        self.insert_to_queue(self.df)
         self.df = None
         self.data = []
+
+    def placeBracketOrder(
+        parentOrderId: int,
+        action: str,
+        quantity: float,
+        limitPrice: float,
+        takeProfitLimitPrice: float,
+        stopLossPrice: float,
+        contract: Contract,
+    ):
+        parent = Order()
+
+        parent.orderId = parentOrderId
+        parent.action = action
+        parent.orderType = "LMT"
+        parent.totalQuantity = quantity
+        parent.lmtPrice = limitPrice
+        parent.transmit = False
+
+        takeProfit = Order()
+        takeProfit.orderId = parent.orderId + 1
+        takeProfit.action = "SELL" if action == "BUY" else "BUY"
+        takeProfit.orderType = "LMT"
+        takeProfit.totalQuantity = quantity
+        takeProfit.lmtPrice = takeProfitLimitPrice
+        takeProfit.parentId = parentOrderId
+        takeProfit.transmit = False
+
+        stopLoss = Order()
+        stopLoss.orderId = parent.orderId + 2
+        stopLoss.action = "SELL" if action == "BUY" else "BUY"
+        stopLoss.orderType = "STP"
+        stopLoss.auxPrice = stopLossPrice
+        stopLoss.totalQuantity = quantity
+        stopLoss.parentId = parentOrderId
+        stopLoss.transmit = True
+
+        bracketOrder = [parent, takeProfit, stopLoss]
+        for order in bracketOrder:
+            self.placeOrder(order.orderId, contract, order)
+
+    def accountSummary(
+        self, reqId: int, account: str, tag: str, value: str, currency: str
+    ):
+        logger.info(
+            f"AccountSummary. ReqId: {reqId}, Account: {account}, Tag: {tag}, Value: {value}, Currency: {currency}"
+        )
+        self.insert_to_queue((tag, value))
+
+    def accountSummaryEnd(self, reqId: int):
+        logger.info(f"AccountSummaryEnd. ReqId: {reqId}")
+        self.insert_to_queue(None)
 
     # def historicalDataUpdate(self, reqId, bar):
     #     line = vars(bar)
@@ -75,7 +136,14 @@ class IBapi(EWrapper, EClient):  # type: ignore
     #     # will overwrite last bar at that same time
     #     self.df.loc[pd.to_datetime(line.pop("date"))] = line
 
-    # def nextValidId(self, orderId: int):
-    #     logger.info(f"Setting nextValidOrderId: {orderId}")
-    #     self.nextValidOrderId = orderId
-    #     self.start()
+    def tickPrice(
+        self, reqId: TickerId, tickType: TickType, price: float, attrib: TickAttrib
+    ):
+        """Market data tick price callback. Handles all price related ticks."""
+
+        logger.info(f"Tick Price. Ticker Id: {reqId}, Price: {price}")
+        self.insert_to_queue(price)
+
+    def nextValidId(self, orderId: int):
+        logger.info(f"Setting nextValidOrderId: {orderId}")
+        self.nextValidOrderId = orderId

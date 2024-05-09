@@ -1,13 +1,17 @@
-import math
 from typing import Any, Optional
 from numpy import Infinity
 import numpy as np
-from pandas import DataFrame
+from numpy import ndarray as NDArray
 
-from consts.time_consts import BAR_SIZE_SECONDS, HOURS_FROM_START, SECONDS_FROM_END
+from consts.algorithem_consts import ANALYSIS_GAP
 from models.evaluation import EvaluationResults
 from utils.math_utils import round_decimal
-from utils.time_utils import hours_to_seconds
+
+possible_profits = [
+    value
+    for value in np.arange(-50, 50 + ANALYSIS_GAP, ANALYSIS_GAP)
+    if value not in np.arange(-1 + ANALYSIS_GAP, 1, ANALYSIS_GAP)
+]
 
 
 def get_profit_for_ratio(
@@ -49,23 +53,36 @@ def get_stop_loss(x: float) -> float:
         return round_decimal(0 - (0.183673 * x - 0.816326))
 
 
+def get_possible_stop_losses(target_profit: float) -> NDArray[Any, Any]:
+    if target_profit > 0:
+        return np.arange(max(0 - target_profit, -10), -ANALYSIS_GAP, ANALYSIS_GAP)
+    else:
+        return np.arange(ANALYSIS_GAP, min(0 - target_profit, 10), ANALYSIS_GAP)
+
+
 def get_best_ratio(
     evaluation_results: list[EvaluationResults],
 ) -> Optional[dict[str, float]]:
     if len(evaluation_results) == 0:
         return None
     averages: list[dict[str, float]] = []
-    for target_profit in np.arange(-50, 50, 0.5):
-        stop_loss = get_stop_loss(target_profit)
-        profits: list[float] = []
-        for curr_result in evaluation_results:
-            profit = get_profit_for_ratio(target_profit, stop_loss, curr_result.data)
-            profits.append(profit)
+    for target_profit in possible_profits:
+        for stop_loss in get_possible_stop_losses(target_profit):
+            profits: list[float] = []
+            for curr_result in evaluation_results:
+                profit = get_profit_for_ratio(
+                    target_profit, stop_loss, curr_result.data
+                )
+                profits.append(profit)
 
-        average = sum(profits) / len(profits)
-        averages.append(
-            {"target_profit": target_profit, "stop_loss": stop_loss, "average": average}
-        )
+            average = sum(profits) / len(profits)
+            averages.append(
+                {
+                    "target_profit": target_profit,
+                    "stop_loss": stop_loss,
+                    "average": average,
+                }
+            )
 
     best_average = get_best_average(averages)
     return best_average

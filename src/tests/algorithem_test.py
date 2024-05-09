@@ -20,6 +20,8 @@ def test_get_best_ratio() -> None:
             )
         ]
     )
+    if ratio is None:
+        assert False
     assert ratio["target_profit"] == -3.5
     assert ratio["average"] == 3.5
 
