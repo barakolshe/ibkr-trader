@@ -1,5 +1,6 @@
+from decimal import Decimal
 from queue import Queue
-from typing import Any
+from typing import Any, Optional
 import arrow
 from ibapi.contract import Contract
 from pandas import DataFrame
@@ -15,10 +16,14 @@ from consts.time_consts import (
 from ib.app import IBapi  # type: ignore
 from models.evaluation import Evaluation
 from logger.logger import logger
+from utils.math_utils import D
 
 
 def get_historical_data(
-    app: IBapi, evaluation: Evaluation, response_queue: Queue[Any]
+    app: IBapi,
+    evaluation: Evaluation,
+    response_queue: Queue[Any],
+    id: Optional[int] = None,
 ) -> DataFrame:
     logger.info(f"Getting historical data for evaluation: {evaluation}")
     contract = Contract()
@@ -29,7 +34,7 @@ def get_historical_data(
 
     endDate = f"{arrow.get(evaluation.datetime, TIMEZONE).shift(hours=HOURS_FROM_START).format(DATETIME_FORMATTING)} {TIMEZONE}"
     app.reqHistoricalData(
-        app.nextValidOrderId,
+        app.nextValidOrderId if id is None else id,
         contract,
         endDate,  # end date time
         f"{SECONDS_FROM_END} S",  # duration
@@ -45,32 +50,39 @@ def get_historical_data(
     return df
 
 
-def get_account_usd(app: IBapi, response_queue: Queue[Any]) -> float:
+def get_account_usd(app: IBapi, response_queue: Queue[Any]) -> Decimal:
     app.reqAccountSummary(app.nextValidOrderId, "All", "$LEDGER")
-    usd: float = -1
+    usd: Decimal = D("-1")
     response: Any = ""
     while response is not None:
         response = response_queue.get()
         if response is None:
             break
         if response[0] == "CashBalance":
-            usd = float(response[1])
+            usd = D(response[1])
 
     if usd == -1:
         raise ValueError("Error getting account USD")
-    return min(usd, MAX_CASH_VALUE)
+    return usd.min(MAX_CASH_VALUE)
 
 
 def get_current_stock_price(
     app: IBapi, symbol: str, exchange: str, response_queue: Queue[Any]
-) -> float:
+) -> Decimal:
     contract = Contract()
     contract.symbol = symbol
     contract.secType = "STK"
     contract.exchange = exchange
     contract.currency = "USD"
     app.reqMktData(app.nextValidOrderId, contract, "", True, False, [])
-    value = -1
-    for _ in range(0, 3):
-        value = response_queue.get()
+    value: Decimal = D(response_queue.get())
     return value
+
+
+def get_contract(symbol: str, exchange: str) -> Contract:
+    contract = Contract()
+    contract.symbol = symbol
+    contract.secType = "STK"
+    contract.exchange = exchange
+    contract.currency = "USD"
+    return contract

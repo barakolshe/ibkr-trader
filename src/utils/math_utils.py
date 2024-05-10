@@ -1,7 +1,13 @@
-def round_decimal(number: float, precision: int = 4) -> float:
-    number_string = str(number)
-    parts = number_string.split(".")
-    if len(parts) == 1:
+from decimal import Decimal
+from typing import Union
+
+
+def D(
+    number: Union[float, Decimal, str], precision: Decimal = Decimal("0.0000")
+) -> Decimal:
+    number = Decimal(number)
+    if Decimal(number) == Decimal("Infinity") or Decimal(number) == Decimal(
+        "-Infinity"
+    ):
         return number
-    rounded_number = float(parts[0] + "." + parts[1][0:precision])
-    return rounded_number
+    return Decimal("1") * Decimal(number).quantize(precision)

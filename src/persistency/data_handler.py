@@ -1,5 +1,4 @@
 import json
-from typing import Any
 import os
 import json
 
@@ -16,15 +15,6 @@ def save_groups_to_file(groups: list[GroupRatio]) -> None:
         groups_file.write(groups_json)
 
 
-def get_stocks_json() -> Any:
-    logger.info("Getting stocks json")
-    path = os.environ.get("STOCKS_FILE_PATH")
-    if not path:
-        raise ValueError("STOCKS_FILE_PATH environment variable not set")
-    with open(path, "r") as stocks_file:
-        return json.load(stocks_file)
-
-
 def load_groups_from_file() -> list[GroupRatio]:
     logger.info("Loading stocks json")
     path = os.environ.get(GROUPS_FILE_PATH)
@@ -37,6 +27,7 @@ def load_groups_from_file() -> list[GroupRatio]:
                 target_profit=group_ratio_json["target_profit"],
                 stop_loss=group_ratio_json["stop_loss"],
                 average=group_ratio_json["average"],
+                urls=group_ratio_json["urls"],
             )
             for group_ratio_json in json.load(stocks_file)
         ]

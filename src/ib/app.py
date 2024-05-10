@@ -15,6 +15,7 @@ from ibapi.ticktype import TickType
 
 from consts.time_consts import AWARE_DATETIME_FORMATTING
 from logger.logger import logger
+from utils.math_utils import D
 
 
 class IBapi(EWrapper, EClient):  # type: ignore
@@ -63,7 +64,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
             logger.error("ERROR %s %s %s", reqId, errorCode, errorString)
 
     def historicalData(self, reqId, bar):
-        logger.info(f"HistoricalData. ReqId: {reqId}, BarData: {bar}")
+        self.logAnswer(current_fn_name(), vars())
         bar_dict = vars(bar)
         bar_dict["date"] = arrow.get(
             bar_dict["date"], AWARE_DATETIME_FORMATTING
@@ -71,7 +72,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
         self.data.append(vars(bar))
 
     def historicalDataEnd(self, reqId: int, start: str, end: str):
-        logger.info(f"HistoricalDataEnd. ReqId: {reqId}, from: {start}, to: {end}")
+        self.logAnswer(current_fn_name(), vars())
         self.df = pd.DataFrame(self.data)
         self.df.set_index("date", inplace=True)
         self.insert_to_queue(self.df)
@@ -79,21 +80,23 @@ class IBapi(EWrapper, EClient):  # type: ignore
         self.data = []
 
     def placeBracketOrder(
+        self,
         parentOrderId: int,
         action: str,
         quantity: float,
-        limitPrice: float,
+        priceLimit: float,
         takeProfitLimitPrice: float,
         stopLossPrice: float,
         contract: Contract,
     ):
+        self.logAnswer(current_fn_name(), vars())
         parent = Order()
 
         parent.orderId = parentOrderId
         parent.action = action
         parent.orderType = "LMT"
         parent.totalQuantity = quantity
-        parent.lmtPrice = limitPrice
+        parent.lmtPrice = priceLimit
         parent.transmit = False
 
         takeProfit = Order()
@@ -121,13 +124,11 @@ class IBapi(EWrapper, EClient):  # type: ignore
     def accountSummary(
         self, reqId: int, account: str, tag: str, value: str, currency: str
     ):
-        logger.info(
-            f"AccountSummary. ReqId: {reqId}, Account: {account}, Tag: {tag}, Value: {value}, Currency: {currency}"
-        )
+        self.logAnswer(current_fn_name(), vars())
         self.insert_to_queue((tag, value))
 
     def accountSummaryEnd(self, reqId: int):
-        logger.info(f"AccountSummaryEnd. ReqId: {reqId}")
+        self.logAnswer(current_fn_name(), vars())
         self.insert_to_queue(None)
 
     # def historicalDataUpdate(self, reqId, bar):
@@ -141,9 +142,40 @@ class IBapi(EWrapper, EClient):  # type: ignore
     ):
         """Market data tick price callback. Handles all price related ticks."""
 
-        logger.info(f"Tick Price. Ticker Id: {reqId}, Price: {price}")
-        self.insert_to_queue(price)
+        self.logAnswer(current_fn_name(), vars())
+        if tickType == 2:
+            self.insert_to_queue(price)
 
     def nextValidId(self, orderId: int):
-        logger.info(f"Setting nextValidOrderId: {orderId}")
+        self.logAnswer(current_fn_name(), vars())
         self.nextValidOrderId = orderId
+
+    def orderStatus(
+        self,
+        orderId: int,
+        status: str,
+        filled: Decimal,
+        remaining: Decimal,
+        avgFillPrice: float,
+        permId: int,
+        parentId: int,
+        lastFillPrice: float,
+        clientId: int,
+        whyHeld: str,
+        mktCapPrice: float,
+    ):
+        self.logAnswer(current_fn_name(), vars())
+        self.insert_to_queue(
+            (
+                status,
+                filled,
+                remaining,
+                avgFillPrice,
+                permId,
+                parentId,
+                lastFillPrice,
+                clientId,
+                whyHeld,
+                mktCapPrice,
+            )
+        )

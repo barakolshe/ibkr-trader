@@ -1,5 +1,11 @@
-SCORE_GROUP_RANGE = 0.5
+from decimal import Decimal
+from utils.math_utils import D
 
-MAX_CASH_VALUE = 1000
 
-ANALYSIS_GAP = 0.1
+SCORE_GROUP_RANGE = D("0.5")
+
+MAX_CASH_VALUE = D("1000")
+
+ANALYSIS_GAP = D("0.001")
+
+PRECISION = 4

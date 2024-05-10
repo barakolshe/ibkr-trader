@@ -2,7 +2,9 @@ from queue import Queue
 from typing import Any
 import time
 from threading import Thread
+import decimal
 
+from consts.algorithem_consts import PRECISION
 from controllers.evaluation.evaluate import get_evaluations, iterate_evaluations
 from ib.app import IBapi  # type: ignore
 

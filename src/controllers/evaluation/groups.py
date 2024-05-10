@@ -1,3 +1,4 @@
+from decimal import Decimal
 import numpy as np
 
 from consts.algorithem_consts import SCORE_GROUP_RANGE
@@ -23,7 +24,7 @@ def split_to_groups(
     return groups
 
 
-def get_group_for_score(groups: list[GroupRatio], score: float) -> GroupRatio:
+def get_group_for_score(groups: list[GroupRatio], score: Decimal) -> GroupRatio:
     for group in groups:
         if group.score_range[0] <= score <= group.score_range[1]:
             return group
