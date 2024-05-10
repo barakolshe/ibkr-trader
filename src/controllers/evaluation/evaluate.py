@@ -24,7 +24,7 @@ def iterate_evaluations(
     logger.info("Iterating evaluations")
     evaluations_raw_data: list[EvaluationResults] = []
     for index, evaluation in enumerate(
-        evaluations[0:20]
+        evaluations
     ):  # TODO: change this when you're ready
         df: DataFrame = get_historical_data(app, evaluation, response_queue, index)
         if df is None:

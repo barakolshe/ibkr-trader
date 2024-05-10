@@ -1,4 +1,4 @@
-import json
+import ujson
 from typing import Any
 import boto3
 
@@ -16,4 +16,4 @@ def get_file_from_bucket(file_name: str) -> str:
 
 
 def get_stocks_json_from_bucket() -> Any:
-    return json.loads(get_file_from_bucket("stocks.json"))
+    return ujson.loads(get_file_from_bucket("stocks.json"))

@@ -34,6 +34,6 @@ class Stock(BaseModel):
     def get_json(self) -> dict[str, Any]:
         return {
             "symbol": self.symbol,
-            "score": str(self.score),
+            "score": self.score,
             "article": self.article.get_json(),
         }

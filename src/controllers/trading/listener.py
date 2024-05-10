@@ -1,4 +1,4 @@
-import json
+import ujson
 from queue import Queue
 import socket
 from typing import Any, Optional
@@ -46,7 +46,7 @@ def listen_for_stocks(queue: Queue[Optional[Stock]]) -> None:
             conn.close()
             queue.put(None)
             break
-        stock_json = json.loads(data)
+        stock_json = ujson.loads(data)
         stock = json_to_stock(stock_json)
         conn.sendall("OK".encode("utf-8"))
         queue.put(stock)
