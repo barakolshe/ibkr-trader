@@ -16,10 +16,7 @@ def save_groups_to_file(groups: list[GroupRatio]) -> None:
 
 def load_groups_from_file() -> list[GroupRatio]:
     logger.info("Loading stocks json")
-    path = os.environ.get(GROUPS_FILE_PATH)
-    if not path:
-        raise ValueError("GROUPS_FILE_PATH environment variable not set")
-    with open(path, "r") as stocks_file:
+    with open(GROUPS_FILE_PATH, "r") as stocks_file:
         return [
             GroupRatio(
                 score_range=group_ratio_json["score_range"],

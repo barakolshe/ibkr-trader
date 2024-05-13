@@ -36,3 +36,17 @@ def stock() -> Stock:
             datetime=arrow.now(tz=TIMEZONE).replace(microsecond=0).datetime,
         ),
     )
+
+
+@pytest.fixture
+def stock_short() -> Stock:
+    return Stock(
+        symbol="AAPL",
+        score=D("-0.5"),
+        article=Article(
+            website="CNN",
+            url="https://cnn.com",
+            content="AAPL is a good stock",
+            datetime=arrow.now(tz=TIMEZONE).replace(microsecond=0).datetime,
+        ),
+    )

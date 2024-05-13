@@ -165,17 +165,18 @@ class IBapi(EWrapper, EClient):  # type: ignore
         mktCapPrice: float,
     ):
         self.logAnswer(current_fn_name(), vars())
-        self.insert_to_queue(
-            (
-                status,
-                filled,
-                remaining,
-                avgFillPrice,
-                permId,
-                parentId,
-                lastFillPrice,
-                clientId,
-                whyHeld,
-                mktCapPrice,
+        if status == "Filled":
+            self.insert_to_queue(
+                (
+                    status,
+                    filled,
+                    remaining,
+                    avgFillPrice,
+                    permId,
+                    parentId,
+                    lastFillPrice,
+                    clientId,
+                    whyHeld,
+                    mktCapPrice,
+                )
             )
-        )

@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Annotated, Any
 from pydantic import BaseModel
+from datetime import datetime
 
 from models.article import Article
 
@@ -23,6 +24,7 @@ class GroupRatio(BaseModel):
             "target_profit": self.target_profit,
             "stop_loss": self.stop_loss,
             "average": self.average,
+            "urls": self.urls,
         }
 
 
@@ -37,3 +39,9 @@ class Stock(BaseModel):
             "score": self.score,
             "article": self.article.get_json(),
         }
+
+
+class Position(BaseModel):
+    symbol: str
+    quantity: Decimal
+    datetime: datetime

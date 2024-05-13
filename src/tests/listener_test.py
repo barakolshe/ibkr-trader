@@ -10,7 +10,7 @@ from ib.app import IBapi  # type: ignore
 from models.trading import Stock
 
 
-def test_listen_for_stocks(stock: Stock) -> None:
+def test_listen_for_stocks(stock_short: Stock) -> None:
     queue: Queue[Any] = Queue()
     server = Thread(target=listen_for_stocks, args=(queue,))
     server.start()
@@ -18,18 +18,18 @@ def test_listen_for_stocks(stock: Stock) -> None:
 
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect(("127.0.0.1", LISTENING_PORT))
-    client_socket.sendall(ujson.dumps(stock.get_json()).encode("utf-8"))
+    client_socket.sendall(ujson.dumps(stock_short.get_json()).encode("utf-8"))
     data = client_socket.recv(20)
     client_socket.close()
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect(("127.0.0.1", LISTENING_PORT))
     client_socket.send("EXIT".encode("utf-8"))
     assert data == b"OK"
-    assert queue.get() == stock
+    assert queue.get() == stock_short
 
 
 def test_trade_from_socket(
-    stock: Stock, get_app: Callable[[], tuple[IBapi, Queue[Any], Thread]]
+    stock_short: Stock, get_app: Callable[[], tuple[IBapi, Queue[Any], Thread]]
 ) -> None:
     app, queue, thread = get_app()
     server = Thread(target=listen_for_stocks, args=(queue,))
@@ -39,6 +39,6 @@ def test_trade_from_socket(
 
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect(("127.0.0.1", LISTENING_PORT))
-    client_socket.sendall(ujson.dumps(stock.get_json()).encode("utf-8"))
+    client_socket.sendall(ujson.dumps(stock_short.get_json()).encode("utf-8"))
     data = client_socket.recv(20)
     client_socket.close()

@@ -5,7 +5,6 @@ import arrow
 from ibapi.contract import Contract
 from pandas import DataFrame
 
-from consts.algorithem_consts import MAX_CASH_VALUE
 from consts.time_consts import (
     BAR_SIZE_SECONDS,
     DATETIME_FORMATTING,
@@ -13,6 +12,7 @@ from consts.time_consts import (
     SECONDS_FROM_END,
     TIMEZONE,
 )
+from consts.trading_consts import MAX_CASH_VALUE
 from ib.app import IBapi  # type: ignore
 from models.evaluation import Evaluation
 from logger.logger import logger
