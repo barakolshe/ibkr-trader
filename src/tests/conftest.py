@@ -18,7 +18,7 @@ def get_app() -> Callable[[], tuple[IBapi, Queue[Any], Thread]]:
         queue = Queue[Any]()
         app = IBapi(queue)
         app.connect("127.0.0.1", 7497, 1)
-        thread = Thread(target=app.run)
+        thread = Thread(target=app.run, daemon=True)
         return app, queue, thread
 
     return inside_get_app

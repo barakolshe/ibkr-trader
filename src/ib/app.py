@@ -49,8 +49,6 @@ class IBapi(EWrapper, EClient):  # type: ignore
     ):
         """This event is called when there is an error with the
         communication or when TWS wants to send a message to the client."""
-        if reqId != -1:
-            self.insert_to_queue(None)
         self.logAnswer(current_fn_name(), vars())
         if advancedOrderRejectJson:
             logger.error(
@@ -98,6 +96,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
         parent.totalQuantity = quantity
         parent.lmtPrice = priceLimit
         parent.transmit = False
+        parent.outsideRth = True
 
         takeProfit = Order()
         takeProfit.orderId = parent.orderId + 1
@@ -107,6 +106,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
         takeProfit.lmtPrice = takeProfitLimitPrice
         takeProfit.parentId = parentOrderId
         takeProfit.transmit = False
+        takeProfit.outsideRth = True
 
         stopLoss = Order()
         stopLoss.orderId = parent.orderId + 2
@@ -116,6 +116,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
         stopLoss.totalQuantity = quantity
         stopLoss.parentId = parentOrderId
         stopLoss.transmit = True
+        stopLoss.outsideRth = True
 
         bracketOrder = [parent, takeProfit, stopLoss]
         for order in bracketOrder:
@@ -167,16 +168,17 @@ class IBapi(EWrapper, EClient):  # type: ignore
         self.logAnswer(current_fn_name(), vars())
         if status == "Filled":
             self.insert_to_queue(
-                (
-                    status,
-                    filled,
-                    remaining,
-                    avgFillPrice,
-                    permId,
-                    parentId,
-                    lastFillPrice,
-                    clientId,
-                    whyHeld,
-                    mktCapPrice,
-                )
+                {
+                    "order_id": orderId,
+                    "status": status,
+                    "filled": filled,
+                    "remaining": remaining,
+                    "avgFillPrice": avgFillPrice,
+                    "permId": permId,
+                    "parentId": parentId,
+                    "lastFillPrice": lastFillPrice,
+                    "clientId": clientId,
+                    "whyHeld": whyHeld,
+                    "mktCapPrice": mktCapPrice,
+                }
             )

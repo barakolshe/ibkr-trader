@@ -52,16 +52,18 @@ def listen_for_stocks(queue: Queue[Optional[Stock]], kill_queue: Queue[Any]) -> 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("127.0.0.1", LISTENING_PORT))
     server.listen(5)
+    server.settimeout(10)
     logger.info("Server is listening")
     while True:
         logger.info("Waiting for connections")
-        conn, addr = server.accept()
-        if wait_for_time(kill_queue):
-            if not kill_queue.empty():
-                return
+        if not kill_queue.empty():
+            return
+        try:
+            conn, addr = server.accept()
+            logger.info(f"Connected by {addr}")
+            data = conn.recv(100000).decode("utf-8")
+        except Exception:
             continue
-        logger.info(f"Connected by {addr}")
-        data = conn.recv(2048).decode("utf-8")
         stock_json = ujson.loads(data)
         stock = json_to_stock(stock_json)
         conn.sendall("OK".encode("utf-8"))

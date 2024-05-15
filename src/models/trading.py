@@ -42,6 +42,7 @@ class Stock(BaseModel):
 
 
 class Position(BaseModel):
+    order_id: int
     symbol: str
     quantity: Decimal
     datetime: datetime

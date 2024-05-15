@@ -46,16 +46,25 @@ class Trader:
     def wait_for_open_positions(self) -> None:
         logger.info("Waiting for open positions")
         while len(self.open_positions) > 0:
+            trade: Optional[dict[Any, Any]] = None
+            try:
+                trade = self.app_queue.get(timeout=10)
+            except:
+                pass
+            if trade is not None and trade["status"] == "Filled":
+                for open_position in self.open_positions:
+                    if open_position.order_id == trade["order_id"]:
+                        self.open_positions.remove(open_position)
+                        break
             for open_position in self.open_positions:
                 if (
                     open_position.datetime
                     >= arrow.get(open_position.datetime, TIMEZONE)
-                    .shift(hour=1)
+                    .shift(minute=5)
                     .datetime
                 ):
                     self.close_trade(open_position)
                     self.open_positions.remove(open_position)
-            time.sleep(10)
 
     def close_trade(self, position: Position) -> None:
         logger.info(f"Closing trade for stock: {position.symbol}")
@@ -78,30 +87,35 @@ class Trader:
         response = self.app_queue.get()
         logger.info(response)
 
-    def main_loop(self, is_test=False) -> None:
-        while True:
-            self.wait_for_open_positions()
-            if self.should_exit():
-                return
-            stock: Optional[Stock] = None
-            try:
-                stock = self.trade_events_queue.get(timeout=10)
-            except Exception:
-                continue
-            if stock is None:
-                continue
+    def main_loop(self, is_test: bool = False) -> None:
+        try:
+            while True:
+                self.wait_for_open_positions()
+                if self.should_exit():
+                    return
+                stock: Optional[Stock] = None
+                try:
+                    stock = self.trade_events_queue.get(timeout=10)
+                except Exception:
+                    continue
+                if stock is None:
+                    continue
 
-            datetime = stock.article.datetime
-            if datetime < arrow.now(tz=TIMEZONE).shift(minutes=-2).datetime:
-                logger.info("Stock is too old, skipping")
-                continue
-            matching_group = get_group_for_score(
-                self.groups,
-                stock.score,
-            )
-            self.trade(stock, matching_group)
-            if is_test:
-                return
+                datetime = stock.article.datetime
+                if datetime < arrow.now(tz=TIMEZONE).shift(minutes=-2).datetime:
+                    logger.info("Stock is too old, skipping")
+                    continue
+                matching_group = get_group_for_score(
+                    self.groups,
+                    stock.score,
+                )
+                self.trade(stock, matching_group)
+                if is_test:
+                    self.wait_for_open_positions()
+                    return
+        except Exception:
+            logger.critical("Error in main loop", exc_info=True)
+            raise
 
     def trade(
         self,
@@ -113,10 +127,12 @@ class Trader:
         )
         contract: Contract = get_contract(stock.symbol, "SMART")
         action = "BUY" if group_ratio.target_profit > 0 else "SELL"
-        account_usd = get_account_usd(self.app, self.app_queue)
         stock_price = get_current_stock_price(
             self.app, stock.symbol, "SMART", self.app_queue
         )
+        if not (1 <= stock_price <= 30):
+            return
+        account_usd = get_account_usd(self.app, self.app_queue)
         quantity = int(account_usd / stock_price)
         price_limit = D(
             (
@@ -147,13 +163,13 @@ class Trader:
                 stop_loss,
                 contract,
             )
-            for _ in range(3):
-                response = self.app_queue.get()
-                logger.info(response)
+            response = self.app_queue.get()
+            logger.info(response)
             self.open_positions.append(
                 Position(
+                    order_id=response["order_id"],
                     symbol=stock.symbol,
-                    quantity=quantity,
+                    quantity=D(quantity),
                     datetime=arrow.now(tz=TIMEZONE).datetime,
                 )
             )

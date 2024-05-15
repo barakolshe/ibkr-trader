@@ -12,7 +12,7 @@ from models.trading import Stock
 
 def test_listen_for_stocks(stock_short: Stock) -> None:
     queue: Queue[Any] = Queue()
-    server = Thread(target=listen_for_stocks, args=(queue,))
+    server = Thread(target=listen_for_stocks, args=(queue,), daemon=True)
     server.start()
     time.sleep(2)
 
@@ -32,7 +32,8 @@ def test_trade_from_socket(
     stock_short: Stock, get_app: Callable[[], tuple[IBapi, Queue[Any], Thread]]
 ) -> None:
     app, queue, thread = get_app()
-    server = Thread(target=listen_for_stocks, args=(queue,))
+    kill_queue = Queue[Any]()
+    server = Thread(target=listen_for_stocks, args=(queue, kill_queue), daemon=True)
     thread.start()
     server.start()
     time.sleep(2)
@@ -42,3 +43,7 @@ def test_trade_from_socket(
     client_socket.sendall(ujson.dumps(stock_short.get_json()).encode("utf-8"))
     data = client_socket.recv(20)
     client_socket.close()
+    kill_queue.put(None)
+    app.disconnect()
+    thread.join()
+    server.join()
