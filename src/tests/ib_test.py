@@ -29,6 +29,7 @@ def test_get_stock_price(
 
     time.sleep(2)
     price = get_current_stock_price(app, "AAPL", "NASDAQ", queue)
+    assert price is not None
     assert price > 0
     app.disconnect()
     thread.join()

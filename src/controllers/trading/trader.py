@@ -70,9 +70,16 @@ class Trader:
         logger.info(f"Closing trade for stock: {position.symbol}")
         contract: Contract = get_contract(position.symbol, "SMART")
         order_id = self.app.nextValidOrderId
-        current_stock_price = get_current_stock_price(
-            self.app, position.symbol, "SMART", self.app_queue
-        )
+        current_stock_price = None
+        counter = 0
+        while current_stock_price is None and counter < 2:
+            current_stock_price = get_current_stock_price(
+                self.app, position.symbol, "SMART", self.app_queue
+            )
+            counter += 1
+        if current_stock_price is None:
+            raise ValueError("Error getting current stock price")
+
         order = Order()
         order.orderId = order_id
         order.action = "SELL" if position.quantity > 0 else "BUY"
@@ -84,7 +91,10 @@ class Trader:
             else current_stock_price + D("0.01") * current_stock_price
         )
         self.app.placeOrder(self.app.nextValidOrderId, contract, order)
-        response = self.app_queue.get()
+        try:
+            response = self.app_queue.get(timeout=30)
+        except:
+            self.app.cancelOrder(order.orderId)
         logger.info(response)
 
     def main_loop(self, is_test: bool = False) -> None:
@@ -130,7 +140,7 @@ class Trader:
         stock_price = get_current_stock_price(
             self.app, stock.symbol, "SMART", self.app_queue
         )
-        if not (1 <= stock_price <= 30):
+        if stock_price is None or not (1 <= stock_price <= 30):
             return
         account_usd = get_account_usd(self.app, self.app_queue)
         quantity = int(account_usd / stock_price)
@@ -154,8 +164,9 @@ class Trader:
             abs((target_profit / stock_price) - 1) >= MIN_TARGET_PROFIT
             and abs((stop_loss / stock_price) - 1) <= MAX_STOP_LOSS
         ):
+            order_id = self.app.nextValidOrderId
             self.app.placeBracketOrder(
-                self.app.nextValidOrderId,
+                order_id,
                 action,
                 quantity,
                 price_limit,
@@ -163,7 +174,11 @@ class Trader:
                 stop_loss,
                 contract,
             )
-            response = self.app_queue.get()
+            try:
+                response = self.app_queue.get(timeout=30)
+            except:
+                self.app.cancelOrder(order_id)
+
             logger.info(response)
             self.open_positions.append(
                 Position(

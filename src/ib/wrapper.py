@@ -55,7 +55,10 @@ def get_account_usd(app: IBapi, response_queue: Queue[Any]) -> Decimal:
     usd: Decimal = D("-1")
     response: Any = ""
     while response is not None:
-        response = response_queue.get()
+        try:
+            response = response_queue.get(timeout=15)
+        except:
+            break
         if response is None:
             break
         if response[0] == "CashBalance":
@@ -68,14 +71,17 @@ def get_account_usd(app: IBapi, response_queue: Queue[Any]) -> Decimal:
 
 def get_current_stock_price(
     app: IBapi, symbol: str, exchange: str, response_queue: Queue[Any]
-) -> Decimal:
+) -> Optional[Decimal]:
     contract = Contract()
     contract.symbol = symbol
     contract.secType = "STK"
     contract.exchange = exchange
     contract.currency = "USD"
     app.reqMktData(app.nextValidOrderId, contract, "", True, False, [])
-    value: Decimal = D(response_queue.get())
+    try:
+        value: Decimal = D(response_queue.get(timeout=10))
+    except:
+        return None
     return value
 
 

@@ -62,7 +62,7 @@ def listen_for_stocks(queue: Queue[Optional[Stock]], kill_queue: Queue[Any]) -> 
             conn, addr = server.accept()
             logger.info(f"Connected by {addr}")
             data = conn.recv(100000).decode("utf-8")
-        except Exception:
+        except socket.timeout:
             continue
         stock_json = ujson.loads(data)
         stock = json_to_stock(stock_json)
