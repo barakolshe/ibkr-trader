@@ -33,19 +33,12 @@ def foo() -> None:
     # Add a strategy
     cerebro.addstrategy(TestStrategy)
 
-    # Datas are in a subfolder of the samples. Need to find where the script is
-    # because it could have been called from anywhere
-    modpath = os.path.dirname(os.path.abspath(sys.argv[0]))
-    datapath = os.path.join(modpath, "../../datas/orcl-1995-2014.txt")
-
     # Create a Data Feed
-    data = bt.feeds.YahooFinanceCSVData(
-        dataname=datapath,
-        # Do not pass values before this date
-        fromdate=datetime.datetime(2000, 1, 1),
-        # Do not pass values before this date
-        todate=datetime.datetime(2000, 12, 31),
-        # Do not pass values after this date
+    data = bt.feeds.YahooFinanceData(
+        dataname=action.symbol,
+        fromdate=datetime.datetime(2024, 5, 14),  # Adjust start date as needed
+        todate=datetime.datetime(2024, 5, 16),  # Adjust end date as needed
+        timeframe=bt.TimeFrame.Minutes,
         reverse=False,
     )
 
