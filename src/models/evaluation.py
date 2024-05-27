@@ -1,13 +1,15 @@
 from datetime import datetime
 from decimal import Decimal
+from pandas import DataFrame
 from pydantic import BaseModel, ConfigDict
 
 
 class Evaluation(BaseModel):
     datetime: datetime
-    score: Decimal
+    # score: Decimal
     symbol: str
-    url: str
+    exchange: str
+    # url: str
 
 
 class EvaluationResults(BaseModel):
@@ -15,3 +17,4 @@ class EvaluationResults(BaseModel):
 
     evaluation: Evaluation
     data: list[Decimal]
+    dataframe: DataFrame

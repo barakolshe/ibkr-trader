@@ -29,7 +29,7 @@ def get_historical_data(
     contract = Contract()
     contract.symbol = evaluation.symbol
     contract.secType = "STK"
-    contract.exchange = "SMART"  # TODO: change this
+    contract.exchange = evaluation.exchange  # TODO: change this
     contract.currency = "USD"
 
     endDate = f"{arrow.get(evaluation.datetime, TIMEZONE).shift(hours=HOURS_FROM_START).format(DATETIME_FORMATTING)} {TIMEZONE}"

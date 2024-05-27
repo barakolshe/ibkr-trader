@@ -15,6 +15,7 @@ from ibapi.ticktype import TickType
 
 from consts.time_consts import AWARE_DATETIME_FORMATTING
 from logger.logger import logger
+from models.app_error import AppError
 from utils.math_utils import D
 
 
@@ -38,7 +39,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
                 del prms["self"]
             else:
                 prms = fnParams
-            logger.info("ANSWER function: %s, parameters: %s", fnName, prms)
+            logger.debug("ANSWER function: %s, parameters: %s", fnName, prms)
 
     def error(
         self,
@@ -60,6 +61,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
             )
         else:
             logger.error("ERROR %s %s %s", reqId, errorCode, errorString)
+        self.queue.put(AppError(request_id=reqId, error_code=errorCode))
 
     def historicalData(self, reqId, bar):
         self.logAnswer(current_fn_name(), vars())

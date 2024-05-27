@@ -60,5 +60,33 @@ def main() -> None:
     ib_app_thread.join()
 
 
+def test_stocks() -> None:
+    evaluations = get_evaluations()
+    app_queue = Queue[Any]()
+    app = IBapi(app_queue)
+    app.connect("127.0.0.1", 7497, 1)
+    ib_app_thread = Thread(target=app.run, daemon=True)
+    ib_app_thread.start()
+
+    time.sleep(2)
+
+    evaluations_analysis_kill_queue = Queue[Any]()
+    # evaluations_analysis_thread = Thread(
+    #     target=,
+    #     args=(app, evaluations, app_queue, evaluations_analysis_kill_queue),
+    #     daemon=True,
+    # )
+    # evaluations_analysis_thread.start()
+
+    # wait_for_kill_all_command()
+    # logger.info("Sending exit signal")
+    # evaluations_analysis_kill_queue.put(None)
+    # evaluations_analysis_thread.join()
+
+    iterate_evaluations(app, evaluations, app_queue, evaluations_analysis_kill_queue)
+    app.disconnect()
+    ib_app_thread.join()
+
+
 if __name__ == "__main__":
-    foo()
+    test_stocks()
