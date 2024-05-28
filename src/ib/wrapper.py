@@ -6,7 +6,7 @@ from ibapi.contract import Contract
 from pandas import DataFrame
 
 from consts.time_consts import (
-    BAR_SIZE_SECONDS,
+    BAR_SIZE_MINUTES,
     DATETIME_FORMATTING,
     HOURS_FROM_START,
     SECONDS_FROM_END,
@@ -38,7 +38,7 @@ def get_historical_data(
         contract,
         endDate,  # end date time
         f"{SECONDS_FROM_END} S",  # duration
-        f"{BAR_SIZE_SECONDS} secs",  # bar size
+        f"{BAR_SIZE_MINUTES} min",  # bar size
         "MIDPOINT",  # what to show
         0,  # is regular trading hours
         1,  # format date

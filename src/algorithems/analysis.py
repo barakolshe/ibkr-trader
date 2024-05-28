@@ -12,7 +12,7 @@ from utils.math_utils import D
 possible_profits = [
     value
     for value in np.arange(D("-0.5"), D("0.5") + ANALYSIS_GAP, ANALYSIS_GAP)
-    if value not in np.arange(D("-0.01") + ANALYSIS_GAP, D("0.01"), ANALYSIS_GAP)
+    if value not in np.arange(D("-0.002") + ANALYSIS_GAP, D("0.002"), ANALYSIS_GAP)
 ]
 
 
