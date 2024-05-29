@@ -78,7 +78,7 @@ def iterate_evaluations(
     logger.info("Iterating evaluations")
     evaluations_results: list[EvaluationResults] = []
     for index, evaluation in enumerate(
-        evaluations[0:5]
+        evaluations[0:50]
     ):  # TODO: change this when you're ready
         df: DataFrame = get_historical_data(app, evaluation, response_queue, index)
         if isinstance(df, AppError):
@@ -86,12 +86,16 @@ def iterate_evaluations(
             time.sleep(2)
             empty_queue(response_queue)
             continue
+        original_price = df.iloc[0]["close"]
+        if original_price < D("0.5"):
+            logger.error("Price is too low")
+            continue
         extremums = get_extremums(df)
         evaluations_results.append(
             EvaluationResults(evaluation=evaluation, data=extremums, dataframe=df)
         )
 
-    group = evaluations_results[0:1]
+    group = evaluations_results
     best_ratio = get_best_ratio(group)
     if best_ratio is None:
         logger.error("No best ratio found")
@@ -112,7 +116,7 @@ def iterate_evaluations(
             plt.text(0.5, 0.5, best_ratio_text, ha="center", va="center")
             pdf.savefig()
             plt.close()
-            for evaluation_result in evaluations_results[0:1]:
+            for evaluation_result in evaluations_results:
                 df = evaluation_result.dataframe
                 df["volume"] = df["volume"].astype(float)
 
@@ -144,10 +148,16 @@ def iterate_evaluations(
                 profit = get_profit_for_ratio(
                     ratio.target_profit, ratio.stop_loss, evaluation_result.data
                 )
+                entry_price = evaluation_result.dataframe.iloc[0]["close"]
+                entry_datetime = evaluation_result.dataframe.iloc[
+                    0
+                ].name.to_pydatetime()  # type: ignore
                 text = f"symbol: {evaluation_result.evaluation.symbol}, exchange: {evaluation_result.evaluation.exchange}, date: {arrow.get(evaluation_result.evaluation.datetime).format('DD-MM-YYYY HH:mm:ss')}"
-                profit_text = f"entry price: {evaluation_result.dataframe.iloc[-1]['close']}, profit: {profit}"
-                fig.text(0.2, 0.05, text)
-                fig.text(0.3, 0.02, profit_text)
+                profit_text = f"entry price: {entry_price}, profit: {profit.value:.4f}, time: {profit.datetime - entry_datetime}"
+                url = f"{evaluation_result.evaluation.url}"
+                fig.text(0.01, 0.05, text)
+                fig.text(0.55, 0.05, profit_text)
+                fig.text(0.01, 0.02, url, fontsize=5)
                 pdf.savefig(fig)
                 plt.close()
                 curr_precision = Decimal("Infinity")
@@ -171,6 +181,7 @@ def get_evaluations() -> list[Evaluation]:
                     ).datetime,
                     symbol=evaluated_stock["symbol"],
                     exchange=evaluated_stock["exchange"],
+                    url=article["article_url"],
                 )
             )
     return evaluations

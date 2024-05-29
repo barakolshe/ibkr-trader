@@ -11,7 +11,6 @@ from ib.app import IBapi  # type: ignore
 from integrations.cloud.s3 import wait_for_kill_all_command
 from models.trading import Stock
 from logger.logger import logger
-from ib.backtrader import foo
 
 
 def main() -> None:

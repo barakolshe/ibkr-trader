@@ -7,6 +7,7 @@ from numpy import ndarray as NDArray
 from consts.algorithem_consts import ANALYSIS_GAP
 from consts.trading_consts import MAX_STOP_LOSS
 from models.evaluation import EvaluationResults
+from models.math import Extremum
 from utils.math_utils import D
 
 possible_profits = [
@@ -17,8 +18,8 @@ possible_profits = [
 
 
 def get_profit_for_ratio(
-    target_profit: Decimal, stop_loss: Decimal, evaluation_result: list[Decimal]
-) -> Decimal:
+    target_profit: Decimal, stop_loss: Decimal, evaluation_result: list[Extremum]
+) -> Extremum:
     if target_profit > 0 and stop_loss > 0:
         raise ValueError("Both target_profit and stop_loss must be negative")
     if target_profit < 0 and stop_loss < 0:
@@ -26,16 +27,16 @@ def get_profit_for_ratio(
 
     if target_profit > 0:
         for curr_result in evaluation_result:
-            if curr_result >= target_profit:
-                return target_profit
-            if curr_result <= stop_loss:
-                return stop_loss
+            if curr_result.value >= target_profit:
+                return Extremum(value=target_profit, datetime=curr_result.datetime)
+            if curr_result.value <= stop_loss:
+                return Extremum(value=stop_loss, datetime=curr_result.datetime)
     else:
         for curr_result in evaluation_result:
-            if curr_result <= target_profit:
-                return 0 - target_profit
-            if curr_result >= stop_loss:
-                return 0 - stop_loss
+            if curr_result.value <= target_profit:
+                return Extremum(value=0 - target_profit, datetime=curr_result.datetime)
+            if curr_result.value >= stop_loss:
+                return Extremum(value=0 - stop_loss, datetime=curr_result.datetime)
 
     return evaluation_result[-1]
 
@@ -71,14 +72,14 @@ def get_best_ratio(
     averages: list[dict[str, Decimal]] = []
     for target_profit in possible_profits:
         for stop_loss in get_possible_stop_losses(target_profit):
-            profits: list[Decimal] = []
+            profits: list[Extremum] = []
             for curr_result in evaluation_results:
                 profit = get_profit_for_ratio(
                     target_profit, stop_loss, curr_result.data
                 )
                 profits.append(profit)
 
-            average = D(sum(profits) / len(profits))
+            average = D(sum([profit.value for profit in profits]) / len(profits))
             averages.append(
                 {
                     "target_profit": target_profit,

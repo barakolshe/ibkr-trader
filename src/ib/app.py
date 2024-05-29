@@ -6,6 +6,8 @@ from typing import Any
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.utils import current_fn_name
+from ibapi.contract import ContractDetails
+
 import pandas as pd
 import arrow
 from ibapi.order import Order
@@ -61,7 +63,8 @@ class IBapi(EWrapper, EClient):  # type: ignore
             )
         else:
             logger.error("ERROR %s %s %s", reqId, errorCode, errorString)
-        self.queue.put(AppError(request_id=reqId, error_code=errorCode))
+        if reqId != -1:
+            self.queue.put(AppError(request_id=reqId, error_code=errorCode))
 
     def historicalData(self, reqId, bar):
         self.logAnswer(current_fn_name(), vars())
@@ -184,3 +187,11 @@ class IBapi(EWrapper, EClient):  # type: ignore
                     "mktCapPrice": mktCapPrice,
                 }
             )
+
+    def contractDetails(self, reqId: int, contractDetails: ContractDetails):
+        """Receives the full contract's definitions. This method will return all
+        contracts matching the requested via EEClientSocket::reqContractDetails.
+        For example, one can obtain the whole option chain with it."""
+
+        self.logAnswer(current_fn_name(), vars())
+        self.insert_to_queue(contractDetails)

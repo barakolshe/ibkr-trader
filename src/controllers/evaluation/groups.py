@@ -14,7 +14,7 @@ def split_to_groups(
     for lower_bound_range in np.arange(-10, 10, SCORE_GROUP_RANGE):
         curr_group: list[EvaluationResults] = []
         for evaluation_raw_data in evaluations_raw_data:
-            curr_score = evaluation_raw_data.evaluation.score
+            curr_score = 10
             if lower_bound_range <= curr_score and (
                 lower_bound_range == 10 - SCORE_GROUP_RANGE
                 or curr_score < lower_bound_range + SCORE_GROUP_RANGE
