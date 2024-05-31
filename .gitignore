@@ -4,6 +4,7 @@
 data/
 fake_pdf.pdf
 multipage_pdf.pdf
+*.pdf
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

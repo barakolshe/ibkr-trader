@@ -17,19 +17,19 @@ def main() -> None:
     evaluations = get_evaluations()
     app_queue = Queue[Any]()
     app = IBapi(app_queue)
-    app.connect("127.0.0.1", 7497, 1)
-    ib_app_thread = Thread(target=app.run, daemon=True)
-    ib_app_thread.start()
+    # app.connect("127.0.0.1", 7497, 1)
+    # ib_app_thread = Thread(target=app.run, daemon=True)
+    # ib_app_thread.start()
 
-    time.sleep(2)
-    server_kill_queue = Queue[Any]()
+    # time.sleep(2)
+    # server_kill_queue = Queue[Any]()
     server_queue = Queue[Optional[Stock]]()
-    server_thread = Thread(
-        target=listen_for_stocks, args=(server_queue, server_kill_queue), daemon=True
-    )
-    server_thread.start()
+    # server_thread = Thread(
+    #     target=listen_for_stocks, args=(server_queue, server_kill_queue), daemon=True
+    # )
+    # server_thread.start()
 
-    time.sleep(2)
+    # time.sleep(2)
 
     if os.environ.get("TRADE") == "True":
         trader_kill_queue = Queue[Any]()
@@ -51,12 +51,12 @@ def main() -> None:
         trader_kill_queue.put(None)
         trader_thread.join()
 
-    server_kill_queue.put(None)
-    server_thread.join()
+    # server_kill_queue.put(None)
+    # server_thread.join()
     evaluations_analysis_kill_queue.put(None)
     evaluations_analysis_thread.join()
     app.disconnect()
-    ib_app_thread.join()
+    # ib_app_thread.join()
 
 
 def test_stocks() -> None:

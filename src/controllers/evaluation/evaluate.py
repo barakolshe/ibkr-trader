@@ -78,22 +78,21 @@ def iterate_evaluations(
     logger.info("Iterating evaluations")
     evaluations_results: list[EvaluationResults] = []
     for index, evaluation in enumerate(
-        evaluations[0:50]
+        evaluations
     ):  # TODO: change this when you're ready
-        df: DataFrame = get_historical_data(app, evaluation, response_queue, index)
-        if isinstance(df, AppError):
-            logger.error("Error getting data for evaluation: %s", evaluation)
-            time.sleep(2)
-            empty_queue(response_queue)
+        df = get_historical_data(app, evaluation, response_queue, index)
+        if df is None or df.empty:
             continue
         original_price = df.iloc[0]["close"]
         if original_price < D("0.5"):
             logger.error("Price is too low")
             continue
         extremums = get_extremums(df)
-        evaluations_results.append(
-            EvaluationResults(evaluation=evaluation, data=extremums, dataframe=df)
-        )
+        if len(extremums) == 0:
+            continue
+        logger.info("Got extremums for evaluation: %s", evaluation)
+        curr_results = EvaluationResults(evaluation=evaluation, data=extremums, df=df)
+        evaluations_results.append(curr_results)
 
     group = evaluations_results
     best_ratio = get_best_ratio(group)
@@ -108,16 +107,35 @@ def iterate_evaluations(
         urls=[],
     )
 
+    evaluations_results = sorted(
+        evaluations_results,
+        key=lambda result: get_profit_for_ratio(
+            ratio.target_profit, ratio.stop_loss, result.data
+        ).value,
+        reverse=True,
+    )
+
+    start_date = min([result.evaluation.timestamp for result in evaluations_results])
+    end_date = max([result.evaluation.timestamp for result in evaluations_results])
+
+    average_trade_per_day = len(evaluations_results) / (
+        (end_date - start_date).days + 1
+    )
+
     with PdfPages("fake_pdf.pdf") as fake_pdf:  # type: ignore
-        with PdfPages("multipage_pdf.pdf") as pdf:  # type: ignore
+        with PdfPages("tmp2.pdf") as pdf:  # type: ignore
             plt.figure()
             plt.axis("off")
             best_ratio_text = f"Target profit: {ratio.target_profit}, Stop loss: {ratio.stop_loss}, Average: {ratio.average}"
-            plt.text(0.5, 0.5, best_ratio_text, ha="center", va="center")
+            dates_text = f"Start date: {start_date}, End date: {end_date}"
+            average_per_day_text = f"Average trades per day: {average_trade_per_day}"
+            plt.text(0.5, 0.6, best_ratio_text, ha="center", va="center")
+            plt.text(0.5, 0.5, dates_text, ha="center", va="center")
+            plt.text(0.5, 0.4, average_per_day_text, ha="center", va="center")
             pdf.savefig()
             plt.close()
             for evaluation_result in evaluations_results:
-                df = evaluation_result.dataframe
+                df = evaluation_result.df
                 df["volume"] = df["volume"].astype(float)
 
                 # fake
@@ -135,10 +153,13 @@ def iterate_evaluations(
                 # real
                 market_colors = mpf.make_marketcolors(up="g", down="r")
                 style = mpf.make_mpf_style(marketcolors=market_colors)
+                vwap = mpf.make_addplot(df["vwap"], type="line", width=1.5)
                 fig, axis = mpf.plot(
                     df,
                     type="candle",
                     returnfig=True,
+                    addplot=vwap,
+                    volume=True,
                     style=style,
                     datetime_format="%H:%M",
                 )
@@ -148,11 +169,11 @@ def iterate_evaluations(
                 profit = get_profit_for_ratio(
                     ratio.target_profit, ratio.stop_loss, evaluation_result.data
                 )
-                entry_price = evaluation_result.dataframe.iloc[0]["close"]
-                entry_datetime = evaluation_result.dataframe.iloc[
+                entry_price = evaluation_result.df.iloc[0]["close"]
+                entry_datetime = evaluation_result.df.iloc[
                     0
                 ].name.to_pydatetime()  # type: ignore
-                text = f"symbol: {evaluation_result.evaluation.symbol}, exchange: {evaluation_result.evaluation.exchange}, date: {arrow.get(evaluation_result.evaluation.datetime).format('DD-MM-YYYY HH:mm:ss')}"
+                text = f"symbol: {evaluation_result.evaluation.symbol}, exchange: {evaluation_result.evaluation.exchange}, date: {arrow.get(evaluation_result.evaluation.timestamp).format('DD-MM-YYYY HH:mm:ss')}"
                 profit_text = f"entry price: {entry_price}, profit: {profit.value:.4f}, time: {profit.datetime - entry_datetime}"
                 url = f"{evaluation_result.evaluation.url}"
                 fig.text(0.01, 0.05, text)
@@ -174,7 +195,7 @@ def get_evaluations() -> list[Evaluation]:
         for evaluated_stock in article["stocks"]:
             evaluations.append(
                 Evaluation(
-                    datetime=arrow.get(
+                    timestamp=arrow.get(
                         article["article_date"],
                         "YYYY-MM-DD HH:mm:ss",
                         tzinfo="US/Eastern",

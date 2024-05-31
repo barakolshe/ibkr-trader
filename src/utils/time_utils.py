@@ -1,4 +1,8 @@
-def hours_to_seconds(hours: int) -> int:
+def minutes_to_seconds(minutes: int) -> int:
+    return minutes * 60
+
+
+def hours_to_seconds(hours: float) -> float:
     return hours * 60 * 60
 
 

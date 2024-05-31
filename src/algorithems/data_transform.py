@@ -1,11 +1,9 @@
 from datetime import datetime
 from decimal import Decimal
-import math
 from pandas import DataFrame
 
-from consts.time_consts import BAR_SIZE_MINUTES, HOURS_FROM_START, SECONDS_FROM_END
 from models.math import Extremum
-from utils.time_utils import hours_to_seconds
+from utils.math_utils import D
 
 
 def get_change_percentage(a: Decimal, b: Decimal) -> Decimal:
@@ -13,6 +11,8 @@ def get_change_percentage(a: Decimal, b: Decimal) -> Decimal:
 
 
 def _get_extremums(df: DataFrame, start_point: Extremum) -> list[Extremum]:
+    if df.empty:
+        return []
     extremums: list[Extremum] = [start_point]
     for _, row in df.iterrows():
         curr_datetime: datetime = row.name.to_pydatetime()  # type: ignore
@@ -35,17 +35,15 @@ def _get_extremums(df: DataFrame, start_point: Extremum) -> list[Extremum]:
             value=get_change_percentage(extremum.value, start_point.value),
             datetime=extremum.datetime,
         )
-        for extremum in extremums
+        for extremum in extremums[1:]
     ]
-    return extremums[1:]
+
+    return extremums
 
 
 def get_extremums(df: DataFrame) -> list[Extremum]:
-    starting_index = math.floor(
-        (SECONDS_FROM_END - hours_to_seconds(HOURS_FROM_START))
-        / (BAR_SIZE_MINUTES * 60)
-    )
-    original_price = df.iloc[starting_index]["close"]
+    starting_index = 0
+    original_price = D(df.iloc[starting_index]["close"])
     original_datetime = df.iloc[starting_index].name.to_pydatetime()  # type: ignore
     sliced_df = df.iloc[starting_index + 1 :]
     sliced_df.reset_index()
