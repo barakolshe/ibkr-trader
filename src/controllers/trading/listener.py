@@ -1,14 +1,13 @@
+import json
 import time
-import ujson
 from queue import Queue
-import socket
 from typing import Any, Optional
+import pika
 
 import arrow
 from consts.time_consts import DATETIME_FORMATTING, TIMEZONE
 from ib.app import IBapi  # type: ignore
 from logger.logger import logger
-from consts.networking_consts import LISTENING_PORT
 from models.article import Article
 from models.trading import Stock
 
@@ -48,24 +47,22 @@ def wait_for_time(kill_queue: Queue[Any]) -> bool:
                 return has_slept
 
 
-def listen_for_stocks(queue: Queue[Optional[Stock]], kill_queue: Queue[Any]) -> None:
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(("127.0.0.1", LISTENING_PORT))
-    server.listen(5)
-    server.settimeout(10)
-    logger.info("Server is listening")
-    while True:
-        logger.info("Waiting for connections")
-        if not kill_queue.empty():
-            return
-        try:
-            conn, addr = server.accept()
-            logger.info(f"Connected by {addr}")
-            data = conn.recv(100000).decode("utf-8")
-        except socket.timeout:
-            continue
-        stock_json = ujson.loads(data)
-        stock = json_to_stock(stock_json)
-        conn.sendall("OK".encode("utf-8"))
-        queue.put(stock)
-        conn.close()
+def callback(
+    ch: Any, method: Any, properties: Any, body: Any, queue: Queue[Any]
+) -> None:
+    stock_json = json.loads(body)
+    # stock = json_to_stock(stock_json)
+    queue.put(stock_json)
+
+
+def listen_for_stocks(queue: Queue[Stock], kill_queue: Queue[Any]) -> None:
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host="localhost"))
+    channel = connection.channel()
+    channel.basic_consume(
+        queue="stocks",
+        auto_ack=True,
+        on_message_callback=lambda ch, method, properties, body: callback(
+            ch, method, properties, body, queue
+        ),
+    )
+    channel.start_consuming()

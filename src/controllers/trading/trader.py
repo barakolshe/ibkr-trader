@@ -1,194 +1,231 @@
-from decimal import Decimal
+from datetime import timedelta, datetime
 from queue import Queue
-import time
+from threading import Thread, Event
 from typing import Any, Optional
-from ibapi.order import Order
+import backtrader as bt
+from openai import BaseModel
+from pandas import DataFrame
+from pydantic import ConfigDict
 import arrow
 
-from consts.algorithem_consts import PRECISION
-from consts.time_consts import TIMEZONE
-from consts.trading_consts import MAX_STOP_LOSS, MIN_TARGET_PROFIT, PERSUMED_TICK_SIZE
-from controllers.evaluation.groups import get_group_for_score
+from controllers.trading.mock_broker import MockBroker
+from controllers.trading.strategy import strategy_factory
 from ib.app import IBapi  # type: ignore
-from ibapi.contract import Contract
-from ib.wrapper import get_account_usd, get_contract, get_current_stock_price
-from models.trading import GroupRatio, Position, Stock
-from persistency.data_handler import load_groups_from_file
+from ib.wrapper import complete_missing_values, get_historical_data
+from models.evaluation import Evaluation, EvaluationResults, TestEvaluationResults
+from models.trading import Stock
 from utils.math_utils import D
-from logger.logger import logger
+
+
+class StrategyManager(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    strategy: Any
+    thread: Thread
+    add_divisor_event: Event
+    divisor_queue: Queue[int]
+    in_position_event: Event
+    test_next_tick_queue: Queue[Queue[Any]]
+
+    # debugging
+    df: DataFrame
+
+
+TARGET_PROFIT = D("0.4990")
+STOP_LOSS = D("-0.10")
+MAX_TIME = timedelta(minutes=57)
 
 
 class Trader:
     app: IBapi
-    groups: list[GroupRatio]
-    trade_events_queue: Queue[Optional[Stock]]
-    app_queue: Queue[Any]
-    kill_queue: Queue[Any]
+    trade_queue: Queue[Stock]
+    kill_event: Event
+    mock_broker: MockBroker
 
-    open_positions: list[Position] = []
+    open_strategies: list[StrategyManager] = []
 
     def __init__(
         self,
         app: IBapi,
-        trade_event_queue: Queue[Optional[Stock]],
-        app_queue: Queue[Any],
-        kill_queue: Queue[Any],
+        trade_queue: Queue[Stock],
+        kill_event: Event,
     ) -> None:
         self.app = app
-        self.groups = load_groups_from_file()
-        self.trade_events_queue = trade_event_queue
-        self.app_queue = app_queue
-        self.kill_queue = kill_queue
+        self.trade_queue = trade_queue
+        self.kill_event = kill_event
+        self.mock_broker = MockBroker()
 
-    def should_exit(self) -> bool:
-        return not self.kill_queue.empty()
+    def run_cerebro(self, df: DataFrame, strategy: bt.Strategy) -> Thread:
+        cerebro = bt.Cerebro()
+        cerebro.broker.set_cash(self.mock_broker.get_cash())
+        cerebro.addstrategy(strategy)
+        datafeed = bt.feeds.PandasData(dataname=df)
+        cerebro.adddata(datafeed)
+        thread = Thread(target=cerebro.run)
+        thread.start()
+        return thread
 
-    def wait_for_open_positions(self) -> None:
-        logger.info("Waiting for open positions")
-        while len(self.open_positions) > 0:
-            trade: Optional[dict[Any, Any]] = None
-            try:
-                trade = self.app_queue.get(timeout=10)
-            except:
-                pass
-            if trade is not None and trade["status"] == "Filled":
-                for open_position in self.open_positions:
-                    if open_position.order_id == trade["order_id"]:
-                        self.open_positions.remove(open_position)
-                        break
-            for open_position in self.open_positions:
-                if (
-                    open_position.datetime
-                    >= arrow.get(open_position.datetime, TIMEZONE)
-                    .shift(minute=5)
-                    .datetime
-                ):
-                    self.close_trade(open_position)
-                    self.open_positions.remove(open_position)
-
-    def close_trade(self, position: Position) -> None:
-        logger.info(f"Closing trade for stock: {position.symbol}")
-        contract: Contract = get_contract(position.symbol, "SMART")
-        order_id = self.app.nextValidOrderId
-        current_stock_price = None
-        counter = 0
-        while current_stock_price is None and counter < 2:
-            current_stock_price = get_current_stock_price(
-                self.app, position.symbol, "SMART", self.app_queue
-            )
-            counter += 1
-        if current_stock_price is None:
-            raise ValueError("Error getting current stock price")
-
-        order = Order()
-        order.orderId = order_id
-        order.action = "SELL" if position.quantity > 0 else "BUY"
-        order.orderType = "LMT"
-        order.totalQuantity = position.quantity
-        order.lmtPrice = (
-            current_stock_price + D("0.01") * current_stock_price
-            if order.action == "BUY"
-            else current_stock_price + D("0.01") * current_stock_price
-        )
-        self.app.placeOrder(self.app.nextValidOrderId, contract, order)
-        try:
-            response = self.app_queue.get(timeout=30)
-        except:
-            self.app.cancelOrder(order.orderId)
-        logger.info(response)
-
-    def main_loop(self, is_test: bool = False) -> None:
-        try:
-            while True:
-                self.wait_for_open_positions()
-                if self.should_exit():
-                    return
-                stock: Optional[Stock] = None
-                try:
-                    stock = self.trade_events_queue.get(timeout=10)
-                except Exception:
-                    continue
-                if stock is None:
-                    continue
-
-                datetime = stock.article.datetime
-                if datetime < arrow.now(tz=TIMEZONE).shift(minutes=-2).datetime:
-                    logger.info("Stock is too old, skipping")
-                    continue
-                matching_group = get_group_for_score(
-                    self.groups,
-                    stock.score,
-                )
-                self.trade(stock, matching_group)
-                if is_test:
-                    self.wait_for_open_positions()
-                    return
-        except Exception:
-            logger.critical("Error in main loop", exc_info=True)
-            raise
-
-    def trade(
+    def create_strategy(
         self,
-        stock: Stock,
-        group_ratio: GroupRatio,
+        symbol: str,
+        df: DataFrame,
+        event_timestamp: datetime,
+        curr_datetime: Optional[datetime] = None,
     ) -> None:
-        logger.info(
-            f"Trading stock: {stock.symbol} with group ratio: {group_ratio.get_json()}"
-        )
-        contract: Contract = get_contract(stock.symbol, "SMART")
-        action = "BUY" if group_ratio.target_profit > 0 else "SELL"
-        stock_price = get_current_stock_price(
-            self.app, stock.symbol, "SMART", self.app_queue
-        )
-        if stock_price is None or not (1 <= stock_price <= 30):
-            return
-        account_usd = get_account_usd(self.app, self.app_queue)
-        quantity = int(account_usd / stock_price)
-        price_limit = D(
-            (
-                stock_price + stock_price * D("0.01")
-                if action == "BUY"
-                else stock_price - stock_price * D("0.01")
-            ),
-            precision=Decimal("0.00"),
-        )
-        target_profit = D(
-            stock_price + (group_ratio.target_profit * stock_price),
-            precision=Decimal("0.00"),
-        )
-        stop_loss = D(
-            stock_price + (group_ratio.stop_loss * stock_price),
-            precision=Decimal("0.00"),
-        )
-        if (
-            abs((target_profit / stock_price) - 1) >= MIN_TARGET_PROFIT
-            and abs((stop_loss / stock_price) - 1) <= MAX_STOP_LOSS
-        ):
-            order_id = self.app.nextValidOrderId
-            self.app.placeBracketOrder(
-                order_id,
-                action,
-                quantity,
-                price_limit,
-                target_profit,
-                stop_loss,
-                contract,
-            )
-            try:
-                response = self.app_queue.get(timeout=30)
-            except:
-                self.app.cancelOrder(order_id)
+        add_divisor_event = Event()
+        divisor_queue = Queue[int]()
+        in_position_event = Event()
+        test_next_tick_queue = Queue[Queue[Any]]()
 
-            logger.info(response)
-            self.open_positions.append(
-                Position(
-                    order_id=response["order_id"],
-                    symbol=stock.symbol,
-                    quantity=D(quantity),
-                    datetime=arrow.now(tz=TIMEZONE).datetime,
+        strategy = strategy_factory(
+            TARGET_PROFIT,
+            STOP_LOSS,
+            MAX_TIME,
+            symbol,
+            event_timestamp,
+            add_divisor_event,
+            divisor_queue,
+            len(self.open_strategies) + 1,
+            in_position_event,
+            self.mock_broker,
+            test_next_tick_queue,
+            curr_datetime,
+        )
+        thread = self.run_cerebro(df, strategy)
+        self.open_strategies.append(
+            StrategyManager(
+                strategy=strategy,
+                thread=thread,
+                add_divisor_event=add_divisor_event,
+                divisor_queue=divisor_queue,
+                in_position_event=in_position_event,
+                test_next_tick_queue=test_next_tick_queue,
+                df=df,
+            )
+        )
+
+    def main_loop(self) -> None:
+        while True:
+            stocks = [self.trade_queue.get()]
+
+            # Waiting for existing strategies to close positions
+            strategy_on = True
+            while strategy_on:
+                for strategy_manager in self.open_strategies:
+                    if strategy_manager.in_position_event.is_set():
+                        strategy_manager.thread.join()
+                        self.open_strategies.remove(strategy_manager)
+                        break
+                strategy_on = False
+
+            if self.kill_event.is_set():
+                return
+
+            # Getting all the new stocks
+            while not self.trade_queue.empty():
+                stocks.append(self.trade_queue.get())
+
+            # Filtering existing stocks that already have strategies
+            existing_symbols: list[str] = [
+                strategy_manager.strategy.symbol
+                for strategy_manager in self.open_strategies
+            ]
+            stocks = [stock for stock in stocks if stock.symbol not in existing_symbols]
+
+            # Adding divisors for existing strategies
+            for strategy_manager in self.open_strategies:
+                strategy_manager.add_divisor_event.set()
+                strategy_manager.divisor_queue.put(
+                    len(self.open_strategies) + len(stocks)
                 )
-            )
 
+            # Creating new strategies for new stocks
+            for stock in stocks:
+                self.create_strategy(
+                    stock.symbol, DataFrame(), stock.article.datetime
+                )  # TODO: Change this
+
+    def main_loop_test(self, evaluations_results: list[TestEvaluationResults]) -> None:
+        start_date = min(
+            [result.evaluation.timestamp for result in evaluations_results]
+        )
+        end_date = max([result.evaluation.timestamp for result in evaluations_results])
+        curr_date = start_date
+        while curr_date < end_date:
+            # Telling strategies to continue and waiting for their tick to end
+            for strategy_manager in self.open_strategies:
+                response_queue = Queue[Any]()
+                strategy_manager.test_next_tick_queue.put(response_queue)
+                try:
+                    response_queue.get(timeout=1)
+                except:
+                    if not strategy_manager.thread.is_alive():
+                        self.open_strategies.remove(strategy_manager)
+
+            # Checking if any new stock should be added
+            if any(
+                [
+                    strategy_manager.in_position_event.is_set()
+                    for strategy_manager in self.open_strategies
+                ]
+            ):
+                continue
+
+            # Adding new stocks to the strategies
+            for evaluation_result in evaluations_results:
+                existing_symbols = [
+                    strategy_manager.strategy.symbol
+                    for strategy_manager in self.open_strategies
+                ]
+                if (
+                    evaluation_result.df.index[0]
+                    <= curr_date
+                    <= evaluation_result.df.index[-1]
+                    and evaluation_result.evaluation.symbol not in existing_symbols
+                ):
+                    self.create_strategy(
+                        evaluation_result.evaluation.symbol,
+                        evaluation_result.df,
+                        evaluation_result.evaluation.timestamp,
+                        curr_date,
+                    )
+
+            # Incrementing curr date by 1 minute
+            curr_date += timedelta(minutes=1)
+        print("Cash:", self.mock_broker.get_cash())
+
+    def test_strategy(
+        self,
+        evaluation_results: list[TestEvaluationResults],
+    ) -> None:
+        results: list[dict[str, float]] = []
+
+        cash: float = 10000
+        for evaluation_result in evaluation_results:
+            strategy = strategy_factory(
+                TARGET_PROFIT,
+                STOP_LOSS,
+                timedelta(hours=1),
+                evaluation_result.evaluation.symbol,
+                evaluation_result.evaluation.timestamp,
+                Event(),
+                Queue[int](),
+                1,
+                Event(),
+            )
+            cerebro = bt.Cerebro()
+            cerebro.broker.setcash(100000.0)
+            cerebro.addstrategy(strategy)
+            datafeed = bt.feeds.PandasData(dataname=evaluation_result.df)
+            cerebro.adddata(datafeed)
+            cerebro.broker.setcash(cash)
+            cerebro.run()
+            cash = cerebro.broker.get_cash()
+            print(f"{evaluation_result.evaluation.symbol}: {(cash):.2f}")
         print(
-            f"Trading stock: {stock.symbol} with group ratio: {group_ratio.get_json()}"
+            {
+                "cash": cash,
+                "target_profit": float(TARGET_PROFIT),
+                "stop_loss": float(STOP_LOSS),
+            }
         )

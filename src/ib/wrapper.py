@@ -2,7 +2,7 @@ from decimal import Decimal
 from queue import Queue
 from re import S
 import time
-from typing import Any, Optional
+from typing import Any, Hashable, Optional
 import arrow
 from ibapi.contract import Contract
 from pandas import DataFrame
@@ -25,10 +25,9 @@ from logger.logger import logger
 
 
 def cut_relevant_df(
-    df: DataFrame, start_date: datetime, end_date: datetime
+    df: DataFrame, start_date: datetime, end_date: datetime, time_limit: int
 ) -> Optional[DataFrame]:
     start_of_day = arrow.get(start_date).replace(hour=0, minute=0, second=0).datetime
-    relevant_datetime: Optional[datetime] = None
 
     today_ticks = df[(df.index >= start_of_day)]
     next_day_ticks = df[(df.index >= arrow.get(start_of_day).shift(days=1).datetime)]
@@ -39,24 +38,27 @@ def cut_relevant_df(
     last_of_day = today_ticks.index[-1]
 
     if first_of_day > start_date:
-        relevant_datetime = first_of_day
-        if relevant_datetime is None:
+        start_date = first_of_day
+        if start_date is None:
             return None
-        end_date = (
-            arrow.get(relevant_datetime).shift(minutes=MINUTES_FROM_START).datetime
-        )
+        end_date = arrow.get(start_date).shift(minutes=time_limit).datetime
 
     elif last_of_day < end_date:
-        relevant_datetime = arrow.get(
-            today_ticks[(today_ticks.index <= start_date)].index[-1]
-        ).datetime
-        shift = MINUTES_FROM_START - (end_date - relevant_datetime).seconds // 60
-        if not next_day_ticks.empty:
-            first_next_day = next_day_ticks.index[0]
-            end_date = arrow.get(first_next_day).shift(minutes=shift).datetime
+        if last_of_day <= start_date:
+            if not next_day_ticks.empty:
+                first_next_day = next_day_ticks.index[0]
+                start_date = first_next_day
+                end_date = arrow.get(first_next_day).shift(minutes=time_limit).datetime
+        else:
+            start_date = arrow.get(
+                today_ticks[(today_ticks.index <= start_date)].index[-1]
+            ).datetime
+            shift = time_limit - (end_date - start_date).seconds // 60
+            if not next_day_ticks.empty:
+                first_next_day = next_day_ticks.index[0]
+                end_date = arrow.get(first_next_day).shift(minutes=shift).datetime
 
     else:
-        relevant_datetime = start_date
         if start_date not in df.index:
             current_price = today_ticks[(today_ticks.index <= start_date)].iloc[-1]
             new_df = DataFrame(
@@ -70,44 +72,96 @@ def cut_relevant_df(
                 lambda x: x.tz_convert(TIMEZONE)
             )
 
-    df = df[
-        (df.index >= relevant_datetime) & (df.index <= end_date)  # type: ignore
-    ]  # type: ignore
+    df = df[(df.index >= start_date) & (df.index <= end_date)]
 
     return df
 
 
 def get_historical_data_from_file(
     evaluation: Evaluation,
+    csv_file_path: str,
     start_date: datetime,
     end_date: datetime,
+    time_limit: int,
 ) -> Optional[DataFrame]:
-    df = evaluation.load_df_from_csv()
+    df = evaluation.load_df_from_csv(csv_file_path)
     if df is None:
         raise ValueError("Error loading historical data from file")
-    return cut_relevant_df(df, start_date, end_date)
+    return cut_relevant_df(df, start_date, end_date, time_limit)
 
 
 def get_historical_data(
     app: IBapi,
     evaluation: Evaluation,
+    time_limit: int,
     response_queue: Queue[Any],
     id: Optional[int] = None,
 ) -> Optional[DataFrame]:
-    start_date = arrow.get(evaluation.timestamp, TIMEZONE).shift(minutes=2)
-    end_date = start_date.shift(minutes=MINUTES_FROM_START)
+    start_date = arrow.get(evaluation.timestamp, TIMEZONE)
+    end_date = start_date.shift(minutes=time_limit)
     if evaluation.does_csv_file_exist():
         if evaluation.is_stock_known_invalid():
             return None
-        # if evaluation.should_load_from_file(start_date.datetime, end_date.datetime):
-        #     return get_historical_data_from_file(
-        #         evaluation, start_date.datetime, end_date.datetime
-        #     )
+        matching_file = evaluation.get_matching_csv(
+            start_date.datetime, end_date.datetime
+        )
+        if matching_file:
+            return get_historical_data_from_file(
+                evaluation,
+                matching_file,
+                start_date.datetime,
+                end_date.datetime,
+                time_limit,
+            )
     df = get_stock_response(evaluation, start_date, end_date)
     if df is None:
         return None
 
-    return cut_relevant_df(df, start_date.datetime, end_date.datetime)
+    return cut_relevant_df(df, start_date.datetime, end_date.datetime, time_limit)
+
+
+def complete_missing_values(df: DataFrame) -> DataFrame:
+    # Ensure the index is datetime and sorted
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+
+    # Create a date range from the first to the last timestamp at minute frequency
+    full_range = pd.date_range(
+        start=df.index[0].floor("T"), end=df.index[-1].ceil("T"), freq="T"
+    )
+
+    # Reindex the dataframe to this full range, filling missing rows with NaNs
+    df_full = df.reindex(full_range)
+
+    # Optionally forward-fill or backward-fill the missing values
+    df_full.ffill(
+        inplace=True
+    )  # You can also use .bfill() or .fillna(method='ffill') based on the requirement
+
+    return df_full
+
+
+# def complete_missing_values(df: DataFrame) -> DataFrame:
+#     start_of_day = arrow.get(df.index[0]).replace(hour=0, minute=0, second=0)
+#     today_ticks = df[
+#         (
+#             df.index
+#             >= start_of_day.datetime & df.index
+#             <= start_of_day.shift(days=1).datetime
+#         )
+#     ]
+
+#     # add a row for each missing minute
+#     for i in range(1, len(today_ticks)):
+#         new_row = today_ticks.iloc[i - 1].copy()
+#         while arrow.get(new_row.name) != arrow.get(today_ticks.index[i]).shift(
+#             minutes=-1
+#         ):
+#             new_row = new_row.copy()
+#             new_row.name = new_row.index + pd.Timedelta(minutes=1)
+#             df.append(new_row)
+
+#     return df
 
 
 def get_stock_response(
@@ -115,8 +169,9 @@ def get_stock_response(
 ) -> Optional[DataFrame]:
     for _ in range(2):
         start_date = start_date.shift(days=-1)
-        end_date = end_date.shift(days=1)
+        end_date = min(end_date.shift(days=1), arrow.now(tz=TIMEZONE).shift(hours=-2))
         try:
+            data = None
             time.sleep(5)
             response = requests.get(
                 "https://data.alpaca.markets/v2/stocks/bars",
@@ -155,10 +210,10 @@ def get_stock_response(
             evaluation.save_to_csv(df, start_date.datetime, end_date.datetime)
             return df
         except Exception as e:
-            logger.error("Error getting stock response: %s", exc_info=True)
+            logger.error(
+                f"Error getting stock response {data if data else ''}.", exc_info=True
+            )
             pass
-        finally:
-            time.sleep(5)
     evaluation.save_invalid_stock()
     return None
 

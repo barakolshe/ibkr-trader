@@ -1,16 +1,15 @@
-from datetime import timedelta
 from decimal import Decimal
 import hashlib
 import json
 from queue import Queue
+import threading
 from typing import Any
 import arrow
-import backtrader as bt
 
-from controllers.trading.strategy import strategy_factory
+from controllers.trading.trader import Trader
 from ib.app import IBapi  # type: ignore
 from ib.wrapper import complete_missing_values, get_historical_data
-from models.evaluation import Evaluation
+from models.evaluation import Evaluation, TestEvaluationResults
 from logger.logger import logger
 
 actions_file_name = "data/actions.json"
@@ -20,6 +19,7 @@ def get_evaluations(delay: int) -> list[Evaluation]:
     logger.info("Getting evaluations")
     evaluations: list[Evaluation] = []
     data: Any = None
+
     with open(actions_file_name) as actions:
         data = json.load(actions)
 
@@ -66,16 +66,10 @@ def backtrade(
     target_profit: Decimal,
     stop_loss: Decimal,
 ) -> None:
-    results: list[dict[str, float]] = []
+    evaluation_results: list[TestEvaluationResults] = []
 
     cash: float = 10000
     for index, evaluation in enumerate(evaluations):
-        strategy = strategy_factory(
-            target_profit,
-            stop_loss,
-            timedelta(hours=1),
-            evaluation.symbol,
-        )
         df = get_historical_data(
             app, evaluation, time_limit + 60, response_queue, index
         )
@@ -87,22 +81,8 @@ def backtrade(
         ):
             continue
         df = complete_missing_values(df)
-        cerebro = bt.Cerebro()
-        cerebro.broker.setcash(100000.0)
-        cerebro.addstrategy(strategy)
-        datafeed = bt.feeds.PandasData(dataname=df)
-        cerebro.adddata(datafeed)
-        cerebro.broker.setcash(cash)
-        cerebro.run()
-        cash = cerebro.broker.get_cash()
-        print(f"{evaluation.symbol}: {(cash):.2f}")
-    print(f"target_profit: {target_profit}, stop_loss: {stop_loss}, cash: {cash}")
-    results.append(
-        {
-            "cash": cash,
-            "target_profit": float(target_profit),
-            "stop_loss": float(stop_loss),
-        }
-    )
-    max_result = max(results, key=lambda result: result["cash"])
-    print(max_result)
+        evaluation_results.append(TestEvaluationResults(evaluation=evaluation, df=df))
+
+    kill_event: threading.Event = threading.Event()
+    trader = Trader(app, response_queue, kill_event)
+    trader.main_loop_test(evaluation_results)

@@ -2,28 +2,21 @@ from decimal import Decimal
 import json
 from queue import Queue
 import time
-from typing import Any
+from typing import Any, Optional
 import arrow
-from pandas import DataFrame
-from matplotlib.backends.backend_pdf import PdfPages
-import matplotlib.pyplot as plt
-import mplfinance as mpf
-import matplotlib.ticker as ticker
+import hashlib
 
-from algorithems.analysis import get_best_ratio, get_profit_for_ratio
+from algorithems.analysis import (
+    get_average_for_ratio,
+    get_best_ratio,
+)
 from algorithems.data_transform import get_extremums
-from consts.algorithem_consts import SCORE_GROUP_RANGE
 from consts.time_consts import TIMEZONE
 from ib.app import IBapi  # type: ignore
 from ib.wrapper import get_historical_data
-from controllers.evaluation.groups import split_to_groups
-from integrations.cloud.s3 import get_stocks_json_from_bucket
-from models.app_error import AppError
 from models.evaluation import Evaluation, EvaluationResults
 from logger.logger import logger
 from models.trading import GroupRatio
-from persistency.data_handler import save_groups_to_file
-from utils.itertools_utils import empty_queue
 from utils.math_utils import D
 
 
@@ -38,49 +31,19 @@ def sleep_until_time(kill_queue: Queue[Any]) -> None:
             return
 
 
-curr_precision = Decimal("Infinity")
-
-
-def fake_format_price(x: float, _: None = None) -> str:
-    def check_curr_precision(precision: Decimal) -> None:
-        global curr_precision
-        if curr_precision > precision:
-            curr_precision = precision
-
-    x_decimal = D(x)
-    if x_decimal % D("0.01") != D("0"):
-        check_curr_precision(Decimal("0.001"))
-        return str(x_decimal.quantize(Decimal("0.001")))
-    elif x_decimal % D("0.1") != D("0"):
-        check_curr_precision(Decimal("0.01"))
-        return str(x_decimal.quantize(Decimal("0.01")))
-    elif x_decimal % D("1") != D("0"):
-        check_curr_precision(Decimal("0.1"))
-        return str(x_decimal.quantize(Decimal("0.1")))
-    else:
-        check_curr_precision(Decimal("1"))
-        return str(x_decimal.quantize(Decimal("1")))
-
-
-def format_price(x: float, _: None = None) -> str:
-    global curr_precision
-    x_decimal = D(x)
-    return str(x_decimal.quantize(curr_precision))
-
-
 def iterate_evaluations(
     app: IBapi,
     evaluations: list[Evaluation],
     response_queue: Queue[Any],
     kill_queue: Queue[Any],
-) -> None:
-    global curr_precision
+    time_limit: int,
+    target_profit: Optional[Decimal] = None,
+    stop_loss: Optional[Decimal] = None,
+) -> Optional[tuple[list[EvaluationResults], GroupRatio]]:
     logger.info("Iterating evaluations")
     evaluations_results: list[EvaluationResults] = []
-    for index, evaluation in enumerate(
-        evaluations
-    ):  # TODO: change this when you're ready
-        df = get_historical_data(app, evaluation, response_queue, index)
+    for index, evaluation in enumerate(evaluations):
+        df = get_historical_data(app, evaluation, time_limit, response_queue, index)
         if df is None or df.empty:
             continue
         original_price = df.iloc[0]["close"]
@@ -91,118 +54,83 @@ def iterate_evaluations(
         if len(extremums) == 0:
             continue
         logger.info("Got extremums for evaluation: %s", evaluation)
-        curr_results = EvaluationResults(evaluation=evaluation, data=extremums, df=df)
+        curr_results = EvaluationResults(
+            evaluation=evaluation, data=extremums, df=df, duration=time_limit
+        )
         evaluations_results.append(curr_results)
 
     group = evaluations_results
-    best_ratio = get_best_ratio(group)
-    if best_ratio is None:
-        logger.error("No best ratio found")
-        return
-    ratio = GroupRatio(
-        score_range=(D("0"), D("0")),
-        target_profit=best_ratio["target_profit"],
-        stop_loss=best_ratio["stop_loss"],
-        average=best_ratio["average"],
-        urls=[],
-    )
+    if len(group) == 0:
+        return None
+    if target_profit is None or stop_loss is None:
+        best_ratio = get_best_ratio(group)
+        if best_ratio is None:
+            logger.error("No best ratio found")
+            return None
+        ratio = GroupRatio(
+            score_range=(D("0"), D("0")),
+            target_profit=best_ratio["target_profit"],
+            stop_loss=best_ratio["stop_loss"],
+            average=best_ratio["average"],
+            urls=[],
+        )
+    else:
+        profit = get_average_for_ratio(
+            group,
+            target_profit,
+            stop_loss,
+        )
+        ratio = GroupRatio(
+            score_range=(D("0"), D("0")),
+            target_profit=profit["target_profit"],
+            stop_loss=profit["stop_loss"],
+            average=profit["average"],
+            urls=[],
+        )
 
-    evaluations_results = sorted(
-        evaluations_results,
-        key=lambda result: get_profit_for_ratio(
-            ratio.target_profit, ratio.stop_loss, result.data
-        ).value,
-        reverse=True,
-    )
-
-    start_date = min([result.evaluation.timestamp for result in evaluations_results])
-    end_date = max([result.evaluation.timestamp for result in evaluations_results])
-
-    average_trade_per_day = len(evaluations_results) / (
-        (end_date - start_date).days + 1
-    )
-
-    with PdfPages("fake_pdf.pdf") as fake_pdf:  # type: ignore
-        with PdfPages("tmp2.pdf") as pdf:  # type: ignore
-            plt.figure()
-            plt.axis("off")
-            best_ratio_text = f"Target profit: {ratio.target_profit}, Stop loss: {ratio.stop_loss}, Average: {ratio.average}"
-            dates_text = f"Start date: {start_date}, End date: {end_date}"
-            average_per_day_text = f"Average trades per day: {average_trade_per_day}"
-            plt.text(0.5, 0.6, best_ratio_text, ha="center", va="center")
-            plt.text(0.5, 0.5, dates_text, ha="center", va="center")
-            plt.text(0.5, 0.4, average_per_day_text, ha="center", va="center")
-            pdf.savefig()
-            plt.close()
-            for evaluation_result in evaluations_results:
-                df = evaluation_result.df
-                df["volume"] = df["volume"].astype(float)
-
-                # fake
-                fig, axis = mpf.plot(
-                    df,
-                    type="candle",
-                    returnfig=True,
-                    datetime_format="%H:%M",
-                )
-                axis[0].yaxis.set_major_formatter(
-                    ticker.FuncFormatter(fake_format_price)
-                )
-                fake_pdf.savefig(fig)
-                plt.close()
-                # real
-                market_colors = mpf.make_marketcolors(up="g", down="r")
-                style = mpf.make_mpf_style(marketcolors=market_colors)
-                vwap = mpf.make_addplot(df["vwap"], type="line", width=1.5)
-                fig, axis = mpf.plot(
-                    df,
-                    type="candle",
-                    returnfig=True,
-                    addplot=vwap,
-                    volume=True,
-                    style=style,
-                    datetime_format="%H:%M",
-                )
-                axis[0].yaxis.set_major_formatter(ticker.FuncFormatter(format_price))
-                if fig is None:
-                    continue
-                profit = get_profit_for_ratio(
-                    ratio.target_profit, ratio.stop_loss, evaluation_result.data
-                )
-                entry_price = evaluation_result.df.iloc[0]["close"]
-                entry_datetime = evaluation_result.df.iloc[
-                    0
-                ].name.to_pydatetime()  # type: ignore
-                text = f"symbol: {evaluation_result.evaluation.symbol}, exchange: {evaluation_result.evaluation.exchange}, date: {arrow.get(evaluation_result.evaluation.timestamp).format('DD-MM-YYYY HH:mm:ss')}"
-                profit_text = f"entry price: {entry_price}, profit: {profit.value:.4f}, time: {profit.datetime - entry_datetime}"
-                url = f"{evaluation_result.evaluation.url}"
-                fig.text(0.01, 0.05, text)
-                fig.text(0.55, 0.05, profit_text)
-                fig.text(0.01, 0.02, url, fontsize=5)
-                pdf.savefig(fig)
-                plt.close()
-                curr_precision = Decimal("Infinity")
+    return evaluations_results, ratio
 
 
-def get_evaluations() -> list[Evaluation]:
+actions_file_name = "data/actions.json"
+
+
+def get_evaluations(delay: int) -> list[Evaluation]:
     logger.info("Getting evaluations")
     evaluations: list[Evaluation] = []
     data: Any = None
-    with open("data/actions.json") as actions:
+    with open(actions_file_name) as actions:
         data = json.load(actions)
 
+    bad_urls = []
     for article in data:
         for evaluated_stock in article["stocks"]:
-            evaluations.append(
-                Evaluation(
-                    timestamp=arrow.get(
-                        article["article_date"],
-                        "YYYY-MM-DD HH:mm:ss",
-                        tzinfo="US/Eastern",
-                    ).datetime,
-                    symbol=evaluated_stock["symbol"],
-                    exchange=evaluated_stock["exchange"],
-                    url=article["article_url"],
+            try:
+                evaluations.append(
+                    Evaluation(
+                        timestamp=arrow.get(
+                            article["article_date"],
+                            "YYYY-MM-DD HH:mm:ss",
+                            tzinfo="US/Eastern",
+                        )
+                        .shift(minutes=delay)
+                        .datetime,
+                        symbol=evaluated_stock["symbol"],
+                        state=evaluated_stock["state"],
+                        url=article["article_url"],
+                    )
                 )
-            )
+            except:
+                bad_urls.append(article["article_url"])
+                continue
+
+    if len(bad_urls) > 0:
+        raise Exception(f"Bad urls: {bad_urls}")
     return evaluations
+
+
+def get_json_hash() -> str:
+    with open(actions_file_name) as actions:
+        return str(
+            int(hashlib.sha1((actions.read()).encode("utf-8")).hexdigest(), 16)
+            % (10**8)
+        )

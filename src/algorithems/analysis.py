@@ -18,19 +18,23 @@ possible_profits = [
 
 
 def get_profit_for_ratio(
-    target_profit: Decimal, stop_loss: Decimal, evaluation_result: list[Extremum]
+    target_profit: Decimal,
+    stop_loss: Decimal,
+    evaluation_result: list[Extremum],
 ) -> Extremum:
     if target_profit > 0 and stop_loss > 0:
         raise ValueError("Both target_profit and stop_loss must be negative")
     if target_profit < 0 and stop_loss < 0:
         raise ValueError("Both target_profit and stop_loss must be positive")
 
+    last = evaluation_result[-1]
     if target_profit > 0:
         for curr_result in evaluation_result:
             if curr_result.value >= target_profit:
                 return Extremum(value=target_profit, datetime=curr_result.datetime)
             if curr_result.value <= stop_loss:
                 return Extremum(value=stop_loss, datetime=curr_result.datetime)
+        return Extremum(value=last.value, datetime=last.datetime)
     else:
         for curr_result in evaluation_result:
             if curr_result.value <= target_profit:
@@ -38,7 +42,7 @@ def get_profit_for_ratio(
             if curr_result.value >= stop_loss:
                 return Extremum(value=0 - stop_loss, datetime=curr_result.datetime)
 
-    return evaluation_result[-1]
+        return Extremum(value=0 - last.value, datetime=last.datetime)
 
 
 def get_best_average(averages_list: list[dict[str, Decimal]]) -> dict[str, Decimal]:
@@ -62,6 +66,24 @@ def get_possible_stop_losses(target_profit: Decimal) -> NDArray[Any, Any]:
         return np.arange(
             ANALYSIS_GAP, MAX_STOP_LOSS.min(0 - target_profit), ANALYSIS_GAP
         )
+
+
+def get_average_for_ratio(
+    evaluation_results: list[EvaluationResults],
+    target_profit: Decimal,
+    stop_loss: Decimal,
+) -> dict[str, Any]:
+    profits: list[Extremum] = []
+    for curr_result in evaluation_results:
+        profit = get_profit_for_ratio(target_profit, stop_loss, curr_result.data)
+        profits.append(profit)
+
+    average = D(sum([profit.value for profit in profits]) / len(profits))
+    return {
+        "target_profit": target_profit,
+        "stop_loss": stop_loss,
+        "average": average,
+    }
 
 
 def get_best_ratio(
@@ -88,5 +110,6 @@ def get_best_ratio(
                 }
             )
 
+    averages = sorted(averages, key=lambda average: average["average"], reverse=True)
     best_average = get_best_average(averages)
     return best_average
