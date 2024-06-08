@@ -1,12 +1,22 @@
+from queue import Queue
+from typing import Any
 from logger.logger import logger
 
 
 class MockBroker:
     cash: float = 10000
+    queue: Queue[tuple[str, Any]]
 
-    def get_cash(self) -> float:
-        return self.cash
+    def __init__(self, queue: Queue[tuple[str, Any]]) -> None:
+        self.queue = queue
 
-    def set_cash(self, cash: float) -> None:
-        print(f"Setting cash to: {cash}")
-        self.cash = cash
+    def main_loop(self) -> None:
+        while True:
+            type, value = self.queue.get()
+            if type == "GET":
+                value.put(self.cash)
+            elif type == "SET":
+                logger.info(f"Setting cash to {value}")
+                self.cash = value
+            else:
+                raise Exception("Invalid message")

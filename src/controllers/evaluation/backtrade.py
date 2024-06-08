@@ -47,7 +47,23 @@ def get_evaluations(delay: int) -> list[Evaluation]:
 
     if len(bad_urls) > 0:
         raise Exception(f"Bad urls: {bad_urls}")
-    return evaluations
+    return filter_evaluations(evaluations)
+
+
+def filter_evaluations(evaluations: list[Evaluation]) -> list[Evaluation]:
+    filtered_evaluations: list[Evaluation] = []
+
+    for curr_evaluation in evaluations:
+        existing_evaluations = [
+            evaluation
+            for evaluation in filtered_evaluations
+            if evaluation.symbol == curr_evaluation.symbol
+            and evaluation.timestamp == curr_evaluation.timestamp
+        ]
+        if len(existing_evaluations) == 0:
+            filtered_evaluations.append(curr_evaluation)
+
+    return filtered_evaluations
 
 
 def get_json_hash() -> str:
@@ -81,8 +97,10 @@ def backtrade(
         ):
             continue
         df = complete_missing_values(df)
+        if df.close[0] < 0.5:
+            continue
         evaluation_results.append(TestEvaluationResults(evaluation=evaluation, df=df))
 
     kill_event: threading.Event = threading.Event()
     trader = Trader(app, response_queue, kill_event)
-    trader.main_loop_test(evaluation_results)
+    trader.test_strategy(evaluation_results)
