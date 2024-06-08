@@ -300,9 +300,17 @@ def strategy_factory(
                 and curr_datetime >= self.first_of_day_after_start + self.max_time
             ):
                 if self.position.size > 0:
-                    self.sell(size=self.position.size, exectype=bt.Order.Market)
+                    self.sell(
+                        size=self.position.size,
+                        price=self.dataclose[0] * 0.98,
+                        exectype=bt.Order.Limit,
+                    )
                 else:
-                    self.buy(size=0 - self.position.size, exectype=bt.Order.Market)
+                    self.buy(
+                        size=0 - self.position.size,
+                        price=self.dataclose[0] * 1.02,
+                        exectype=bt.Order.Limit,
+                    )
 
     if type == "TEST_REAL_TIME":
 
