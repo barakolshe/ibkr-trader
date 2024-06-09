@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from queue import Queue
 import random
-import threading
 import time
 from typing import Any, Literal, Optional, Union
 import arrow
@@ -22,7 +21,7 @@ def is_order_completed(order: bt.Order) -> bool:
 def strategy_factory(
     _target_profit: Decimal,
     _stop_loss: Decimal,
-    _max_time: timedelta,
+    _max_time: int,
     _symbol: str,
     _event_timestamp: datetime,
     type: Literal["REAL", "TEST", "TEST_REAL_TIME"],
@@ -35,14 +34,14 @@ def strategy_factory(
     class BaseStrategy(bt.Strategy):  # type: ignore
         target_profit: Decimal = _target_profit
         stop_loss: Decimal = _stop_loss
-        max_time: timedelta = _max_time
+        max_time: int = _max_time
         start_price: Optional[Decimal] = None
         symbol: str = _symbol
         event_timestamp: datetime = _event_timestamp
         data_ready: bool = False
 
         strategies_manager_queue: Queue[tuple[str, Any]] = _strategies_manager_queue
-        divisor: int
+        divisor: Optional[int] = None
 
         initial_order: Optional[bt.Order] = None
         limit_price_order: Optional[bt.Order] = None
@@ -51,12 +50,8 @@ def strategy_factory(
 
         # For missing minutes
         first_of_day_after_start: Optional[datetime] = None
-        time_delay: int = 0
 
         def get_cash(self) -> float:
-            raise NotImplementedError()
-
-        def set_cash(self, cash: float) -> None:
             raise NotImplementedError()
 
         def log(self, txt: str, date: Optional[datetime] = None) -> None:
@@ -65,21 +60,14 @@ def strategy_factory(
             logger.info(f"{arrow.get(date).to(TIMEZONE).datetime} {txt}")
 
         def __init__(self) -> None:
-            self.start_time = (
-                arrow.get(self.data.datetime.datetime(1)).to(TIMEZONE).datetime
-            )
-            self.log(
-                f"Started Strategy {self.symbol}",
-                self.start_time,
-            )
             self.dataclose = self.data.close
             self.strategies_manager_queue.put(("ADD", self))
 
         def get_divisor(self) -> int:
             response_queue = Queue[int]()
             self.strategies_manager_queue.put(("GET", response_queue))
-            self.divisor = response_queue.get()
-            return self.divisor
+            divisor = response_queue.get()
+            return divisor
 
         def notify_data(self, data: Any, status: int) -> None:
             if status == data.LIVE:
@@ -202,115 +190,120 @@ def strategy_factory(
         def sleep(self) -> None:
             raise NotImplementedError()
 
-        def set_first_tick_of_day(self, curr_datetime: datetime) -> datetime:
-            if (
-                curr_datetime >= self.event_timestamp
-                and self.first_of_day_after_start is None
-            ):
-                self.first_of_day_after_start = curr_datetime
-
         def next(self) -> None:
             curr_datetime = (
                 arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE).datetime
             )
-            self.set_first_tick_of_day(curr_datetime)
-            if self.first_of_day_after_start is None:
-                return
-            # The response queue part is for testing
+            # Testing stuff
             response_queue: Optional[Queue[Any]] = None
             if self.should_wait_for_queue_signal():
                 response_queue = self.wait_for_queue_signal(curr_datetime)
                 if response_queue is None:
                     return
 
+            # Checking if i should start trading
             if not self.should_start_trading(curr_datetime):
-                time_delay = self.count_minutes_delay(curr_datetime)
-                self.time_delay = time_delay
-            elif self.time_delay <= 5:
-                if not self.start_price:
+                return
+
+            # Setting the first tick of the day
+            if self.first_of_day_after_start is None:
+                self.first_of_day_after_start = curr_datetime
+
+            time_delay = self.count_minutes_delay(curr_datetime)
+            # Buy opening position
+
+            if time_delay <= 5 and self.initial_order is None:
+                if self.start_price is None:
                     self.start_price = self.dataclose[0]
-                if self.start_price < 0.5:
+                if self.start_price is not None and self.start_price < 0.5:
                     self.stop_run()
                     return
-                self._next(curr_datetime)
-            else:
+                self.move_into_position(curr_datetime)
+            # If there is still no order after 5 minutes, stop the run
+            elif time_delay > 5 and self.initial_order is None:
+                self.stop_run()
+                return
+            # If the position is open but limit and stop orders weren't reached by time limit, close the position
+            elif (
+                self.position.size != 0
+                and not is_order_completed(self.limit_price_order)
+                and not is_order_completed(self.stop_price_order)
+                and time_delay >= self.max_time
+            ):
+                self.move_out_of_position(curr_datetime)
+                return
+            # If the initial order is still not completed after the max time, cancel all orders
+            elif (
+                self.position.size == 0
+                and self.initial_order is not None
+                and not is_order_completed(self.initial_order)
+                and time_delay >= self.max_time
+            ):
+                self.cancel_all_orders()
                 self.stop_run()
                 return
 
             self.handle_next_finish(response_queue)
 
-        def _next(self, curr_datetime: datetime) -> None:
-            if (
-                not self.position
-                and not self.initial_order
-                and is_between_dates(
-                    curr_datetime,
-                    self.first_of_day_after_start,
-                    self.first_of_day_after_start + self.max_time,
-                )
-            ):
-                self.sleep()  # Making sure the thread queues are in sync or something like that
-                divisor = self.get_divisor()
-                cash = self.get_cash()
-                size = ((cash * 0.95) // self.dataclose[0]) // divisor
-                if size == 0:
-                    return
-                if self.target_profit > 0:
-                    (
-                        self.initial_order,
-                        self.limit_price_order,
-                        self.stop_price_order,
-                    ) = self.bracket_order_custom(
-                        limitprice=float(
-                            D(self.dataclose[0]) * (1 + self.target_profit)
-                        ),
-                        price=self.dataclose[0] * 1.01,
-                        stopprice=float(D(self.dataclose[0]) * (1 + self.stop_loss)),
-                        size=size,
-                        parent_valid=curr_datetime + timedelta(minutes=5),
-                        children_valid=curr_datetime + self.max_time,
-                        type="long",
-                    )
-                else:
-                    (
-                        self.initial_order,
-                        self.limit_price_order,
-                        self.stop_price_order,
-                    ) = self.bracket_order_custom(
-                        limitprice=float(
-                            D(self.dataclose[0]) * (1 + self.target_profit)
-                        ),
-                        price=self.dataclose[0] * 0.99,
-                        stopprice=float(D(self.dataclose[0]) * (1 + self.stop_loss)),
-                        size=size,
-                        parent_valid=curr_datetime + timedelta(minutes=5),
-                        children_valid=curr_datetime + self.max_time,
-                        type="short",
-                    )
-                self.order_submitted_follow_up_actions()
-                self.orders = [
+        def cancel_all_orders(self) -> None:
+            for order in self.orders:
+                self.cancel(order)
+
+        def move_into_position(self, curr_datetime: datetime) -> None:
+            self.divisor = self.get_divisor()
+            self.sleep()  # Making sure the thread queues are in sync or something like that
+            cash = self.get_cash()
+            size = ((cash * 0.95) // self.dataclose[0]) // self.divisor
+            if size == 0:
+                return
+            if self.target_profit > 0:
+                (
                     self.initial_order,
                     self.limit_price_order,
                     self.stop_price_order,
-                ]
-            elif (
-                self.position.size != 0
-                and not is_order_completed(self.limit_price_order)
-                and not is_order_completed(self.stop_price_order)
-                and curr_datetime >= self.first_of_day_after_start + self.max_time
-            ):
-                if self.position.size > 0:
-                    self.sell(
-                        size=self.position.size,
-                        price=self.dataclose[0] * 0.98,
-                        exectype=bt.Order.Limit,
-                    )
-                else:
-                    self.buy(
-                        size=0 - self.position.size,
-                        price=self.dataclose[0] * 1.02,
-                        exectype=bt.Order.Limit,
-                    )
+                ) = self.bracket_order_custom(
+                    limitprice=float(D(self.dataclose[0]) * (1 + self.target_profit)),
+                    price=self.dataclose[0] * 1.01,
+                    stopprice=float(D(self.dataclose[0]) * (1 + self.stop_loss)),
+                    size=size,
+                    parent_valid=curr_datetime + timedelta(minutes=5),
+                    children_valid=curr_datetime + timedelta(minutes=self.max_time),
+                    type="long",
+                )
+            else:
+                (
+                    self.initial_order,
+                    self.limit_price_order,
+                    self.stop_price_order,
+                ) = self.bracket_order_custom(
+                    limitprice=float(D(self.dataclose[0]) * (1 + self.target_profit)),
+                    price=self.dataclose[0] * 0.99,
+                    stopprice=float(D(self.dataclose[0]) * (1 + self.stop_loss)),
+                    size=size,
+                    parent_valid=curr_datetime + timedelta(minutes=5),
+                    children_valid=curr_datetime + timedelta(minutes=self.max_time),
+                    type="short",
+                )
+            self.order_submitted_follow_up_actions()
+            self.orders = [
+                self.initial_order,
+                self.limit_price_order,
+                self.stop_price_order,
+            ]
+
+        def move_out_of_position(self, curr_datetime: datetime) -> None:
+            if self.position.size > 0:
+                self.sell(
+                    size=self.position.size,
+                    price=self.dataclose[0] * 0.98,
+                    exectype=bt.Order.Limit,
+                )
+            else:
+                self.buy(
+                    size=0 - self.position.size,
+                    price=self.dataclose[0] * 1.02,
+                    exectype=bt.Order.Limit,
+                )
 
     if type == "TEST_REAL_TIME":
 
@@ -320,11 +313,20 @@ def strategy_factory(
             )
             test_curr_time: Optional[datetime] = _test_curr_time
 
+            def __init__(self) -> None:
+                super().__init__()
+                self.log(
+                    f"Started Strategy {self.symbol}",
+                    self.test_curr_time,
+                )
+
             def sleep(self) -> None:
-                time.sleep(random.uniform(0, 4))
+                if self.divisor is None:
+                    raise Exception("Using test wrong")
+                time_to_sleep = 4 / self.divisor
+                time.sleep(time_to_sleep)
 
             def order_filled_follow_up_actions(self, order: bt.Order) -> None:
-                self.sleep()
                 self.set_cash(self.get_cash() - (order.executed.price * order.size))
 
             def handle_next_finish(self, response_queue: Optional[Queue[Any]]) -> None:
@@ -363,6 +365,7 @@ def strategy_factory(
                 return (
                     self.test_curr_time is not None
                     and self.test_curr_time <= curr_datetime
+                    and self.event_timestamp <= curr_datetime
                 )
 
             def get_cash(self) -> float:
@@ -380,6 +383,16 @@ def strategy_factory(
         return TestStrategy
 
     class GenericRealStrategy(BaseStrategy):
+        def __init__(self) -> None:
+            super().__init__()
+            self.start_time = (
+                arrow.get(self.data.datetime.datetime(1)).to(TIMEZONE).datetime
+            )
+            self.log(
+                f"Started Strategy {self.symbol}",
+                self.start_time,
+            )
+
         def order_filled_follow_up_actions(self, order: bt.Order) -> None:
             return
 
@@ -399,9 +412,6 @@ def strategy_factory(
 
         def get_cash(self) -> float:
             return self.broker.get_cash()  # type: ignore
-
-        def set_cash(self, cash: float) -> None:
-            return
 
     if type == "REAL":
 

@@ -103,4 +103,4 @@ def backtrade(
 
     kill_event: threading.Event = threading.Event()
     trader = Trader(app, response_queue, kill_event)
-    trader.test_strategy(evaluation_results)
+    trader.main_loop_test(evaluation_results)

@@ -16,7 +16,7 @@ class MockBroker:
             if type == "GET":
                 value.put(self.cash)
             elif type == "SET":
-                logger.info(f"Setting cash to {value}")
+                logger.info(f"Setting cash to {value:.2f}")
                 self.cash = value
             else:
                 raise Exception("Invalid message")

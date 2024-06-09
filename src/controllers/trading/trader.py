@@ -34,7 +34,7 @@ class StrategyManager(BaseModel):
 
 TARGET_PROFIT = D("0.4990")
 STOP_LOSS = D("-0.10")
-MAX_TIME = timedelta(minutes=57)
+MAX_TIME = 57
 
 
 class Trader:
@@ -182,7 +182,7 @@ class Trader:
             strategy = strategy_factory(
                 TARGET_PROFIT,
                 STOP_LOSS,
-                timedelta(hours=1),
+                57,
                 evaluation_result.evaluation.symbol,
                 evaluation_result.evaluation.timestamp,
                 "TEST",
