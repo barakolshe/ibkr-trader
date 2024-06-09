@@ -408,7 +408,7 @@ def strategy_factory(
         def wait_for_queue_signal(
             self, curr_datetime: datetime
         ) -> Optional[Queue[Any]]:
-            return None
+            raise Exception("Not possible to wait for queue signal in real mode")
 
         def get_cash(self) -> float:
             return self.broker.get_cash()  # type: ignore
