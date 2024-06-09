@@ -57,7 +57,9 @@ def strategy_factory(
         def log(self, txt: str, date: Optional[datetime] = None) -> None:
             """Logging function for this strategy"""
             date = date or self.data.datetime.datetime(0)
-            logger.info(f"{arrow.get(date).to(TIMEZONE).datetime} {txt}")
+            logger.info(
+                f"{arrow.get(date).to(TIMEZONE).format('YYYY-MM-DD HH-mm-ss')} {txt}"
+            )
 
         def __init__(self) -> None:
             self.dataclose = self.data.close
@@ -107,7 +109,8 @@ def strategy_factory(
                 stop_price = self.sell(
                     price=stopprice,
                     size=size,
-                    exectype=bt.Order.Stop,
+                    exectype=bt.Order.StopLimit,
+                    pricelimit=stopprice * 0.95,
                     transmit=True,
                     parent=main,
                     valid=children_valid,
@@ -131,7 +134,8 @@ def strategy_factory(
                 stop_price = self.buy(
                     price=stopprice,
                     size=size,
-                    exectype=bt.Order.Stop,
+                    exectype=bt.Order.StopLimit,
+                    pricelimit=stopprice * 1.05,
                     transmit=True,
                     parent=main,
                     valid=children_valid,

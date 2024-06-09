@@ -84,7 +84,6 @@ def backtrade(
 ) -> None:
     evaluation_results: list[TestEvaluationResults] = []
 
-    cash: float = 10000
     for index, evaluation in enumerate(evaluations):
         df = get_historical_data(
             app, evaluation, time_limit + 60, response_queue, index
@@ -103,4 +102,4 @@ def backtrade(
 
     kill_event: threading.Event = threading.Event()
     trader = Trader(app, response_queue, kill_event)
-    trader.main_loop_test(evaluation_results)
+    trader.test_strategy(evaluation_results)

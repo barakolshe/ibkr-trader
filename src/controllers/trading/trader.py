@@ -177,7 +177,7 @@ class Trader:
         self,
         evaluation_results: list[TestEvaluationResults],
     ) -> None:
-        cash: float = 10000
+        cash: float = 5000
         for evaluation_result in evaluation_results:
             strategy = strategy_factory(
                 TARGET_PROFIT,
@@ -189,7 +189,7 @@ class Trader:
                 self.positions_queue,
             )
             cerebro = bt.Cerebro()
-            cerebro.broker.setcash(100000.0)
+            cerebro.broker.setcash(5000.0)
             cerebro.addstrategy(strategy)
             datafeed = bt.feeds.PandasData(dataname=evaluation_result.df)
             cerebro.adddata(datafeed)
