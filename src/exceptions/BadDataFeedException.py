@@ -1,0 +1,2 @@
+class BadDataFeedException(Exception):
+    pass

@@ -6,6 +6,7 @@ fake_pdf.pdf
 multipage_pdf.pdf
 *.pdf
 logs/
+virtualenv/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

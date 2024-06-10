@@ -1,7 +1,5 @@
 from decimal import Decimal
 import json
-from queue import Queue
-import time
 from typing import Any, Optional
 import arrow
 import hashlib
@@ -10,32 +8,16 @@ from algorithems.analysis import (
     get_average_for_ratio,
     get_best_ratio,
 )
+from controllers.trading.fetchers.wrapper import get_historical_data
 from algorithems.data_transform import get_extremums
-from consts.time_consts import TIMEZONE
-from ib.app import IBapi  # type: ignore
-from ib.wrapper import get_historical_data
 from models.evaluation import Evaluation, EvaluationResults
 from logger.logger import logger
 from models.trading import GroupRatio
 from utils.math_utils import D
 
 
-def sleep_until_time(kill_queue: Queue[Any]) -> None:
-    while True:
-        curr_date = arrow.now(tz=TIMEZONE)
-        if curr_date.hour == 17:
-            return
-        else:
-            time.sleep(20)
-        if not kill_queue.empty():
-            return
-
-
 def iterate_evaluations(
-    app: IBapi,
     evaluations: list[Evaluation],
-    response_queue: Queue[Any],
-    kill_queue: Queue[Any],
     time_limit: int,
     target_profit: Optional[Decimal] = None,
     stop_loss: Optional[Decimal] = None,
@@ -43,7 +25,7 @@ def iterate_evaluations(
     logger.info("Iterating evaluations")
     evaluations_results: list[EvaluationResults] = []
     for index, evaluation in enumerate(evaluations):
-        df = get_historical_data(app, evaluation, time_limit, response_queue, index)
+        df = get_historical_data(evaluation, time_limit)
         if df is None or df.empty:
             continue
         original_price = df.iloc[0]["close"]

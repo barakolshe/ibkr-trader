@@ -1,12 +1,11 @@
 import json
 import time
 from queue import Queue
-from typing import Any, Optional
+from typing import Any
 import pika
 
 import arrow
 from consts.time_consts import DATETIME_FORMATTING, TIMEZONE
-from ib.app import IBapi  # type: ignore
 from logger.logger import logger
 from models.article import Article
 from models.trading import Stock
@@ -15,7 +14,6 @@ from models.trading import Stock
 def json_to_stock(stock_json: Any) -> Stock:
     return Stock(
         symbol=stock_json["symbol"],
-        score=stock_json["score"],
         article=Article(
             website=stock_json["article"]["website"],
             url=stock_json["article"]["url"],
@@ -48,21 +46,21 @@ def wait_for_time(kill_queue: Queue[Any]) -> bool:
 
 
 def callback(
-    ch: Any, method: Any, properties: Any, body: Any, queue: Queue[Any]
+    ch: Any, method: Any, properties: Any, body: Any, queue: Queue[Stock]
 ) -> None:
     stock_json = json.loads(body)
-    # stock = json_to_stock(stock_json)
-    queue.put(stock_json)
+    stock = json_to_stock(stock_json)
+    queue.put(stock)
 
 
-def listen_for_stocks(queue: Queue[Stock], kill_queue: Queue[Any]) -> None:
+def listen_for_stocks(server_queue: Queue[Stock]) -> None:
     connection = pika.BlockingConnection(pika.ConnectionParameters(host="localhost"))
     channel = connection.channel()
     channel.basic_consume(
         queue="stocks",
         auto_ack=True,
         on_message_callback=lambda ch, method, properties, body: callback(
-            ch, method, properties, body, queue
+            ch, method, properties, body, server_queue
         ),
     )
     channel.start_consuming()

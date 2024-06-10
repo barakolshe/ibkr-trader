@@ -1,14 +1,15 @@
 from decimal import Decimal
 import hashlib
 import json
-from queue import Queue
 import threading
 from typing import Any
 import arrow
 
+from controllers.trading.fetchers.wrapper import (
+    get_historical_data,
+    complete_missing_values,
+)
 from controllers.trading.trader import Trader
-from ib.app import IBapi  # type: ignore
-from ib.wrapper import complete_missing_values, get_historical_data
 from models.evaluation import Evaluation, TestEvaluationResults
 from logger.logger import logger
 
@@ -75,9 +76,7 @@ def get_json_hash() -> str:
 
 
 def backtrade(
-    app: IBapi,
     evaluations: list[Evaluation],
-    response_queue: Queue[Any],
     time_limit: int,
     target_profit: Decimal,
     stop_loss: Decimal,
@@ -85,9 +84,7 @@ def backtrade(
     evaluation_results: list[TestEvaluationResults] = []
 
     for index, evaluation in enumerate(evaluations):
-        df = get_historical_data(
-            app, evaluation, time_limit + 60, response_queue, index
-        )
+        df = get_historical_data(evaluation, time_limit + 60)
         if (
             df is None
             or df.empty
@@ -101,5 +98,5 @@ def backtrade(
         evaluation_results.append(TestEvaluationResults(evaluation=evaluation, df=df))
 
     kill_event: threading.Event = threading.Event()
-    trader = Trader(app, response_queue, kill_event)
-    trader.test_strategy(evaluation_results)
+    trader = Trader(kill_event)
+    trader.main_loop_test(evaluation_results)

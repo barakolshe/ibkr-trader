@@ -30,13 +30,11 @@ class GroupRatio(BaseModel):
 
 class Stock(BaseModel):
     symbol: str
-    score: Annotated[Decimal, checkScoreValidation]
     article: Article
 
     def get_json(self) -> dict[str, Any]:
         return {
             "symbol": self.symbol,
-            "score": self.score,
             "article": self.article.get_json(),
         }
 

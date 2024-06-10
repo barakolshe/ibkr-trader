@@ -1,10 +1,8 @@
-from decimal import Decimal
 from queue import Queue
 from re import S
 import time
-from typing import Any, Hashable, Optional
+from typing import Any, Optional
 import arrow
-from ibapi.contract import Contract
 from pandas import DataFrame
 import os
 import pandas as pd
@@ -13,14 +11,9 @@ from datetime import datetime
 
 from consts.time_consts import (
     ALPACA_TIME_FORMAT,
-    MINUTES_FROM_START,
-    SAFETY_DAY_GAP,
     TIMEZONE,
 )
-from consts.trading_consts import MAX_CASH_VALUE
-from ib.app import IBapi  # type: ignore
 from models.evaluation import Evaluation
-from utils.math_utils import D
 from logger.logger import logger
 
 
@@ -91,11 +84,8 @@ def get_historical_data_from_file(
 
 
 def get_historical_data(
-    app: IBapi,
     evaluation: Evaluation,
     time_limit: int,
-    response_queue: Queue[Any],
-    id: Optional[int] = None,
 ) -> Optional[DataFrame]:
     start_date = arrow.get(evaluation.timestamp, TIMEZONE)
     end_date = start_date.shift(minutes=time_limit)
@@ -139,29 +129,6 @@ def complete_missing_values(df: DataFrame) -> DataFrame:
     )  # You can also use .bfill() or .fillna(method='ffill') based on the requirement
 
     return df_full
-
-
-# def complete_missing_values(df: DataFrame) -> DataFrame:
-#     start_of_day = arrow.get(df.index[0]).replace(hour=0, minute=0, second=0)
-#     today_ticks = df[
-#         (
-#             df.index
-#             >= start_of_day.datetime & df.index
-#             <= start_of_day.shift(days=1).datetime
-#         )
-#     ]
-
-#     # add a row for each missing minute
-#     for i in range(1, len(today_ticks)):
-#         new_row = today_ticks.iloc[i - 1].copy()
-#         while arrow.get(new_row.name) != arrow.get(today_ticks.index[i]).shift(
-#             minutes=-1
-#         ):
-#             new_row = new_row.copy()
-#             new_row.name = new_row.index + pd.Timedelta(minutes=1)
-#             df.append(new_row)
-
-#     return df
 
 
 def get_stock_response(
@@ -216,47 +183,3 @@ def get_stock_response(
             pass
     evaluation.save_invalid_stock()
     return None
-
-
-def get_account_usd(app: IBapi, response_queue: Queue[Any]) -> Decimal:
-    app.reqAccountSummary(app.nextValidOrderId, "All", "$LEDGER")
-    usd: Decimal = D("-1")
-    response: Any = ""
-    while response is not None:
-        try:
-            response = response_queue.get(timeout=15)
-        except:
-            break
-        if response is None:
-            break
-        if response[0] == "CashBalance":
-            usd = D(response[1])
-
-    if usd == -1:
-        raise ValueError("Error getting account USD")
-    return usd.min(MAX_CASH_VALUE)
-
-
-def get_current_stock_price(
-    app: IBapi, symbol: str, exchange: str, response_queue: Queue[Any]
-) -> Optional[Decimal]:
-    contract = Contract()
-    contract.symbol = symbol
-    contract.secType = "STK"
-    contract.exchange = exchange
-    contract.currency = "USD"
-    app.reqMktData(app.nextValidOrderId, contract, "", True, False, [])
-    try:
-        value: Decimal = D(response_queue.get(timeout=10))
-    except:
-        return None
-    return value
-
-
-def get_contract(symbol: str, exchange: str) -> Contract:
-    contract = Contract()
-    contract.symbol = symbol
-    contract.secType = "STK"
-    contract.exchange = exchange
-    contract.currency = "USD"
-    return contract

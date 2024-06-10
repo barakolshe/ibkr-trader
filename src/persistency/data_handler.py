@@ -1,5 +1,4 @@
 import ujson
-import os
 
 from consts.data_consts import GROUPS_FILE_PATH
 from logger.logger import logger
@@ -9,7 +8,6 @@ from models.trading import GroupRatio
 def save_groups_to_file(groups: list[GroupRatio]) -> None:
     logger.info("Saving groups to file")
     groups_json = ujson.dumps([group.get_json() for group in groups])
-    print(os.getcwd())
     with open(GROUPS_FILE_PATH, "w") as groups_file:
         groups_file.write(groups_json)
 

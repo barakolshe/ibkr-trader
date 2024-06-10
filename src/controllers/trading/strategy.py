@@ -54,13 +54,6 @@ def strategy_factory(
         def get_cash(self) -> float:
             raise NotImplementedError()
 
-        def log(self, txt: str, date: Optional[datetime] = None) -> None:
-            """Logging function for this strategy"""
-            date = date or self.data.datetime.datetime(0)
-            logger.info(
-                f"{arrow.get(date).to(TIMEZONE).format('YYYY-MM-DD HH-mm-ss')} {txt}"
-            )
-
         def __init__(self) -> None:
             self.dataclose = self.data.close
             self.strategies_manager_queue.put(("ADD", self))
@@ -154,16 +147,16 @@ def strategy_factory(
                 return
 
             if order.status in [order.Canceled]:
-                self.log("Order Cancelled")
+                logger.info("Order Cancelled")
                 return
 
             if order.status in [order.Completed]:
                 if order.isbuy():
-                    self.log(
+                    logger.info(
                         f"Buy EXECUTED, {order.executed.price:.2f}, {self.symbol}, divider: {self.divisor}"
                     )
                 elif order.issell():
-                    self.log(
+                    logger.info(
                         f"SELL EXECUTED, {order.executed.price:.2f}, {self.symbol}"
                     )
                 self.order_filled_follow_up_actions(order)
@@ -195,6 +188,7 @@ def strategy_factory(
             raise NotImplementedError()
 
         def next(self) -> None:
+            logger.info(f"next, {self.symbol}")
             curr_datetime = (
                 arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE).datetime
             )
@@ -253,11 +247,14 @@ def strategy_factory(
             for order in self.orders:
                 self.cancel(order)
 
+        def get_size(self, divider: int, cash: float) -> int:
+            raise NotImplementedError()
+
         def move_into_position(self, curr_datetime: datetime) -> None:
             self.divisor = self.get_divisor()
             self.sleep()  # Making sure the thread queues are in sync or something like that
             cash = self.get_cash()
-            size = ((cash * 0.95) // self.dataclose[0]) // self.divisor
+            size = self.get_size(self.divisor, cash)
             if size == 0:
                 return
             if self.target_profit > 0:
@@ -319,10 +316,6 @@ def strategy_factory(
 
             def __init__(self) -> None:
                 super().__init__()
-                self.log(
-                    f"Started Strategy {self.symbol}",
-                    self.test_curr_time,
-                )
 
             def sleep(self) -> None:
                 if self.divisor is None:
@@ -384,18 +377,15 @@ def strategy_factory(
                     raise Exception("Using test wrong")
                 _mock_broker_queue.put(("SET", cash))
 
+            def get_size(self, divider: int, cash: float) -> int:
+                return int(((cash * 0.95) // self.dataclose[0]) // self.divisor)
+
         return TestStrategy
 
     class GenericRealStrategy(BaseStrategy):
         def __init__(self) -> None:
             super().__init__()
-            self.start_time = (
-                arrow.get(self.data.datetime.datetime(1)).to(TIMEZONE).datetime
-            )
-            self.log(
-                f"Started Strategy {self.symbol}",
-                self.start_time,
-            )
+            logger.info(f"Started Strategy {self.symbol}, {self.start_time}")
 
         def order_filled_follow_up_actions(self, order: bt.Order) -> None:
             return
@@ -420,15 +410,31 @@ def strategy_factory(
     if type == "REAL":
 
         class RealStrategy(GenericRealStrategy):
+            def __init__(self) -> None:
+                self.start_time = arrow.now(tz=TIMEZONE).datetime
+                super().__init__()
+
             def should_start_trading(self, curr_datetime: datetime) -> bool:
                 return self.data_ready
+
+            def get_size(self, divider: int, cash: float) -> int:
+                return int(((cash * 0.005) // self.dataclose[0]) // self.divisor)
 
         return RealStrategy
 
     if type == "TEST":
 
         class TestRealStrategy(GenericRealStrategy):
+            def __init__(self) -> None:
+                self.start_time = (
+                    arrow.get(self.data.datetime.datetime(1)).to(TIMEZONE).datetime
+                )
+                super().__init__()
+
             def should_start_trading(self, curr_datetime: datetime) -> bool:
                 return True
+
+            def get_size(self, divider: int, cash: float) -> int:
+                return int(((cash * 0.95) // self.dataclose[0]) // self.divisor)
 
         return TestRealStrategy

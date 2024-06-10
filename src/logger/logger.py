@@ -22,12 +22,10 @@ class DiscordHandler(logging.StreamHandler):  # type: ignore
 
 
 logger = logging.getLogger(__name__)
-print("name:", __name__)
 logger.setLevel(logging.INFO)
-# formatter = logging.Formatter(
-#     "%(asctime)s | %(threadName)s | %(levelname)s | %(message)s"
-# )
-formatter = logging.Formatter("%(message)s")
+formatter = logging.Formatter(
+    "%(asctime)s | %(threadName)s | %(levelname)s | %(message)s"
+)
 
 file_handler = RotatingFileHandler(
     LOG_FILE_PATH, maxBytes=ROTATING_FILE_MAX_SIZE, backupCount=BACKUP_COUNT

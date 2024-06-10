@@ -1,14 +1,10 @@
 import json
-import ujson
 from queue import Queue
 from threading import Thread
-import socket, time
-from typing import Any, Callable
+from typing import Any
 import pika
 
-from consts.networking_consts import LISTENING_PORT
 from controllers.trading.listener import listen_for_stocks
-from ib.app import IBapi  # type: ignore
 from models.trading import Stock
 
 

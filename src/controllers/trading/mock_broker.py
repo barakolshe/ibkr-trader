@@ -4,10 +4,11 @@ from logger.logger import logger
 
 
 class MockBroker:
-    cash: float = 10000
+    cash: float
     queue: Queue[tuple[str, Any]]
 
-    def __init__(self, queue: Queue[tuple[str, Any]]) -> None:
+    def __init__(self, queue: Queue[tuple[str, Any]], cash: float) -> None:
+        self.cash = cash
         self.queue = queue
 
     def main_loop(self) -> None:
