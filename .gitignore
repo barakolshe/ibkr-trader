@@ -7,6 +7,8 @@ multipage_pdf.pdf
 *.pdf
 logs/
 virtualenv/
+atreyu-backtrader-api-1.0/
+IBJts/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

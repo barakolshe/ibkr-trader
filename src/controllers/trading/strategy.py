@@ -79,8 +79,8 @@ def strategy_factory(
             price: float,
             stopprice: float,
             size: float,
-            parent_valid: datetime,
-            children_valid: datetime,
+            parent_valid: timedelta,
+            children_valid: timedelta,
             type: Union[Literal["long"], Literal["short"]],
         ) -> tuple[bt.Order, bt.Order, bt.Order]:
             if type == "long":
@@ -267,8 +267,8 @@ def strategy_factory(
                     price=self.dataclose[0] * 1.01,
                     stopprice=float(D(self.dataclose[0]) * (1 + self.stop_loss)),
                     size=size,
-                    parent_valid=curr_datetime + timedelta(minutes=5),
-                    children_valid=curr_datetime + timedelta(minutes=self.max_time),
+                    parent_valid=timedelta(minutes=5),
+                    children_valid=timedelta(minutes=self.max_time),
                     type="long",
                 )
             else:
@@ -281,8 +281,8 @@ def strategy_factory(
                     price=self.dataclose[0] * 0.99,
                     stopprice=float(D(self.dataclose[0]) * (1 + self.stop_loss)),
                     size=size,
-                    parent_valid=curr_datetime + timedelta(minutes=5),
-                    children_valid=curr_datetime + timedelta(minutes=self.max_time),
+                    parent_valid=timedelta(minutes=5),
+                    children_valid=timedelta(minutes=self.max_time),
                     type="short",
                 )
             self.order_submitted_follow_up_actions()
@@ -405,7 +405,7 @@ def strategy_factory(
             raise Exception("Not possible to wait for queue signal in real mode")
 
         def get_cash(self) -> float:
-            return self.broker.get_cash()  # type: ignore
+            return self.broker.getcash()  # type: ignore
 
     if type == "REAL":
 
@@ -418,7 +418,7 @@ def strategy_factory(
                 return self.data_ready
 
             def get_size(self, divider: int, cash: float) -> int:
-                return int(((cash * 0.005) // self.dataclose[0]) // self.divisor)
+                return int(((cash * 0.001) // self.dataclose[0]) // self.divisor)
 
         return RealStrategy
 

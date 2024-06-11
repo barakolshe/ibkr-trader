@@ -1,12 +1,13 @@
 from datetime import timedelta, datetime
 from queue import Queue
-from sys import exc_info
+from random import randint
 from threading import Thread, Event
 from typing import Any, Literal, Optional
 import backtrader as bt
 from pandas import DataFrame
 from pydantic import ConfigDict, BaseModel
 
+from atreyu_backtrader_api import IBData, IBStore
 from controllers.trading.mock_broker import MockBroker
 from controllers.trading.positions_monitor import PositionsManager
 from controllers.trading.strategy import strategy_factory
@@ -61,9 +62,7 @@ class Trader:
         mock_broker = MockBroker(self.mock_broker_queue, 5000.0)
         mock_broker_thread = Thread(target=mock_broker.main_loop, daemon=True)
         mock_broker_thread.start()
-        self.store = bt.stores.IBStore(
-            host="127.0.0.1", port=7497, clientId=35, _debug=True
-        )
+        self.store = IBStore(host="127.0.0.1", port=7497, clientId=randint(0, 100))
 
     def get_cash(self) -> float:
         response_queue = Queue[float]()
@@ -82,20 +81,20 @@ class Trader:
 
     def run_cerebro_ibkr(self, symbol: str, strategy: bt.Strategy) -> Thread:
         cerebro = bt.Cerebro()
-        cerebro.broker = self.store.getbroker()
+        cerebro.setbroker(self.store.getbroker())
         cerebro.addstrategy(strategy)
-        try:
-            datafeed = self.store.getdata(
-                dataname=symbol,
-                timeframe=bt.TimeFrame.Seconds,
-                compression=10,
-                # rtbar=True,  # use RealTimeBars
-            )
-        except:
-            logger.info(f"Bad datafeed {symbol}", exc_info=True)
-            raise BadDataFeedException()
-        # cerebro.adddata(datafeed)
-        cerebro.resampledata(datafeed, timeframe=bt.TimeFrame.Seconds, compression=5)
+        # try:
+        data = self.store.getdata(
+            name="AAPL",  # Data name
+            dataname="AAPL",  # Symbol name
+            secType="STK",  # SecurityType is STOCK
+            exchange="SMART",  # Trading exchange IB's SMART exchange
+            currency="USD",  # Currency of SecurityType
+        )
+        # except:
+        #     logger.info(f"Bad datafeed {symbol}", exc_info=True)
+        #     raise BadDataFeedException()
+        cerebro.adddata(data)
         thread = Thread(target=cerebro.run, daemon=True)
         thread.start()
         return thread
@@ -159,7 +158,6 @@ class Trader:
         while True:
             if not self.server_queue:
                 raise Exception("Trade queue is None")
-
             stock = self.server_queue.get()
 
             if self.kill_event.is_set():
