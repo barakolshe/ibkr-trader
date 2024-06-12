@@ -47,7 +47,7 @@ def get_evaluations(delay: int) -> list[Evaluation]:
                 continue
 
     if len(bad_urls) > 0:
-        raise Exception(f"Bad urls: {bad_urls}")
+        print(f"Bad urls: {bad_urls}")
     return filter_evaluations(evaluations)
 
 

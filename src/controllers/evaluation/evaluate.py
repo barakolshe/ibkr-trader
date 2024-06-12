@@ -76,40 +76,6 @@ def iterate_evaluations(
 actions_file_name = "data/actions.json"
 
 
-def get_evaluations(delay: int) -> list[Evaluation]:
-    logger.info("Getting evaluations")
-    evaluations: list[Evaluation] = []
-    data: Any = None
-    with open(actions_file_name) as actions:
-        data = json.load(actions)
-
-    bad_urls = []
-    for article in data:
-        for evaluated_stock in article["stocks"]:
-            try:
-                evaluations.append(
-                    Evaluation(
-                        timestamp=arrow.get(
-                            article["article_date"],
-                            "YYYY-MM-DD HH:mm:ss",
-                            tzinfo="US/Eastern",
-                        )
-                        .shift(minutes=delay)
-                        .datetime,
-                        symbol=evaluated_stock["symbol"],
-                        state=evaluated_stock["state"],
-                        url=article["article_url"],
-                    )
-                )
-            except:
-                bad_urls.append(article["article_url"])
-                continue
-
-    if len(bad_urls) > 0:
-        raise Exception(f"Bad urls: {bad_urls}")
-    return evaluations
-
-
 def get_json_hash() -> str:
     with open(actions_file_name) as actions:
         return str(

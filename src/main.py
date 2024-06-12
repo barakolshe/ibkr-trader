@@ -129,22 +129,22 @@ def test_stocks() -> None:
         stop_loss,
     )
 
-    get_results(
-        acquirer_evaluations,
-        f"{directory_path}/Acquirer.pdf",
-        max_time_limit,
-        target_profit,
-        stop_loss,
-    )
+    # get_results(
+    #     acquirer_evaluations,
+    #     f"{directory_path}/Acquirer.pdf",
+    #     max_time_limit,
+    #     target_profit,
+    #     stop_loss,
+    # )
 
-    get_results(
-        merging_evaluations,
-        f"{directory_path}/Merging.pdf",
-        max_time_limit,
-        target_profit,
-        stop_loss,
-    )
+    # get_results(
+    #     merging_evaluations,
+    #     f"{directory_path}/Merging.pdf",
+    #     max_time_limit,
+    #     target_profit,
+    #     stop_loss,
+    # )
 
 
 if __name__ == "__main__":
-    main()
+    test_stocks()

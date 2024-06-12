@@ -16,7 +16,6 @@ from models.article import Article
 from models.evaluation import TestEvaluationResults
 from models.trading import Stock
 from utils.math_utils import D
-from logger.logger import logger
 
 
 class StrategyManager(BaseModel):
@@ -34,7 +33,7 @@ class StrategyManager(BaseModel):
 
 TARGET_PROFIT = D("0.4990")
 STOP_LOSS = D("-0.10")
-MAX_TIME = 57
+MAX_TIME = 60
 
 
 class Trader:
@@ -144,17 +143,17 @@ class Trader:
         return existing_strategies
 
     def main_loop(self) -> None:
-        self.server_queue.put(  # type: ignore
-            Stock(
-                symbol="AAPL",
-                article=Article(
-                    website="test",
-                    url="test",
-                    content="test",
-                    datetime=datetime.now(),
-                ),
-            )
-        )
+        # self.server_queue.put(  # type: ignore
+        #     Stock(
+        #         symbol="AAPL",
+        #         article=Article(
+        #             website="test",
+        #             url="test",
+        #             content="test",
+        #             datetime=datetime.now(),
+        #         ),
+        #     )
+        # )
         while True:
             if not self.server_queue:
                 raise Exception("Trade queue is None")
@@ -230,7 +229,7 @@ class Trader:
             strategy = strategy_factory(
                 TARGET_PROFIT,
                 STOP_LOSS,
-                57,
+                60,
                 evaluation_result.evaluation.symbol,
                 evaluation_result.evaluation.timestamp,
                 "TEST",

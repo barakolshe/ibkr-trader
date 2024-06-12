@@ -1,16 +1,13 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 from queue import Queue
-import random
 import time
 from typing import Any, Literal, Optional, Union
 import arrow
 import backtrader as bt
 
 from consts.time_consts import TIMEZONE
-from controllers.trading.mock_broker import MockBroker
 from utils.math_utils import D
-from utils.time_utils import is_between_dates
 from logger.logger import logger
 
 
@@ -75,38 +72,41 @@ def strategy_factory(
 
         def bracket_order_custom(
             self,
-            limitprice: float,
-            price: float,
-            stopprice: float,
+            limitprice: Decimal,
+            price: Decimal,
+            stopprice: Decimal,
             size: float,
             parent_valid: timedelta,
             children_valid: timedelta,
-            type: Union[Literal["long"], Literal["short"]],
+            order_type: Union[Literal["long"], Literal["short"]],
         ) -> tuple[bt.Order, bt.Order, bt.Order]:
-            if type == "long":
+            if order_type == "long":
                 main = self.buy(
                     price=price,
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
                     valid=parent_valid,
+                    outsideRth=True,
                 )
                 limit_price = self.sell(
                     price=limitprice,
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
-                    parent=main,
+                    parentId=main.orderId,
                     valid=children_valid,
+                    outsideRth=True,
                 )
                 stop_price = self.sell(
                     price=stopprice,
                     size=size,
                     exectype=bt.Order.StopLimit,
-                    pricelimit=stopprice * 0.95,
+                    plimit=D(stopprice * D("0.95"), precision=D("0.05")),
                     transmit=True,
-                    parent=main,
+                    parentId=main.orderId,
                     valid=children_valid,
+                    outsideRth=True,
                 )
             else:
                 main = self.sell(
@@ -115,23 +115,26 @@ def strategy_factory(
                     exectype=bt.Order.Limit,
                     transmit=False,
                     valid=parent_valid,
+                    outsideRth=True,
                 )
                 limit_price = self.buy(
                     price=limitprice,
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
-                    parent=main,
+                    parentId=main.orderId,
                     valid=children_valid,
+                    outsideRth=True,
                 )
                 stop_price = self.buy(
                     price=stopprice,
                     size=size,
                     exectype=bt.Order.StopLimit,
-                    pricelimit=stopprice * 1.05,
+                    plimit=D(stopprice * D("1.05"), precision=D("0.05")),
                     transmit=True,
-                    parent=main,
+                    parentId=main.orderId,
                     valid=children_valid,
+                    outsideRth=True,
                 )
 
             return main, limit_price, stop_price
@@ -188,7 +191,6 @@ def strategy_factory(
             raise NotImplementedError()
 
         def next(self) -> None:
-            logger.info(f"next, {self.symbol}")
             curr_datetime = (
                 arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE).datetime
             )
@@ -263,13 +265,19 @@ def strategy_factory(
                     self.limit_price_order,
                     self.stop_price_order,
                 ) = self.bracket_order_custom(
-                    limitprice=float(D(self.dataclose[0]) * (1 + self.target_profit)),
-                    price=self.dataclose[0] * 1.01,
-                    stopprice=float(D(self.dataclose[0]) * (1 + self.stop_loss)),
+                    limitprice=D(
+                        (D(self.dataclose[0]) * (1 + self.target_profit)),
+                        precision=D("0.05"),
+                    ),
+                    price=D(self.dataclose[0] * 1.01, precision=D("0.05")),
+                    stopprice=D(
+                        float(D(self.dataclose[0]) * (1 + self.stop_loss)),
+                        precision=D("0.05"),
+                    ),
                     size=size,
                     parent_valid=timedelta(minutes=5),
                     children_valid=timedelta(minutes=self.max_time),
-                    type="long",
+                    order_type="long",
                 )
             else:
                 (
@@ -277,13 +285,19 @@ def strategy_factory(
                     self.limit_price_order,
                     self.stop_price_order,
                 ) = self.bracket_order_custom(
-                    limitprice=float(D(self.dataclose[0]) * (1 + self.target_profit)),
-                    price=self.dataclose[0] * 0.99,
-                    stopprice=float(D(self.dataclose[0]) * (1 + self.stop_loss)),
+                    limitprice=D(
+                        D(self.dataclose[0]) * (1 + self.target_profit),
+                        precision=D("0.05"),
+                    ),
+                    price=D(self.dataclose[0] * 0.99, precision=D("0.05")),
+                    stopprice=D(
+                        (D(self.dataclose[0]) * (1 + self.stop_loss)),
+                        precision=D("0.05"),
+                    ),
                     size=size,
                     parent_valid=timedelta(minutes=5),
                     children_valid=timedelta(minutes=self.max_time),
-                    type="short",
+                    order_type="short",
                 )
             self.order_submitted_follow_up_actions()
             self.orders = [
@@ -298,12 +312,14 @@ def strategy_factory(
                     size=self.position.size,
                     price=self.dataclose[0] * 0.98,
                     exectype=bt.Order.Limit,
+                    outsideRth=True,
                 )
             else:
                 self.buy(
                     size=0 - self.position.size,
                     price=self.dataclose[0] * 1.02,
                     exectype=bt.Order.Limit,
+                    outsideRth=True,
                 )
 
     if type == "TEST_REAL_TIME":

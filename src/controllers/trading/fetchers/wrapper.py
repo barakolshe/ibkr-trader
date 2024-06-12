@@ -90,7 +90,7 @@ def get_historical_data(
     start_date = arrow.get(evaluation.timestamp, TIMEZONE)
     end_date = start_date.shift(minutes=time_limit)
     if evaluation.does_csv_file_exist():
-        if evaluation.is_stock_known_invalid():
+        if evaluation.is_stock_known_invalid() or evaluation.symbol == "":
             return None
         matching_file = evaluation.get_matching_csv(
             start_date.datetime, end_date.datetime
@@ -153,6 +153,11 @@ def get_stock_response(
                     "APCA-API-SECRET-KEY": os.environ["ALPACA_API_SECRET"],
                 },
             )
+            if response.status_code != 200:
+                logger.error(
+                    f"Error getting stock response {response.text if response.text else ''}."
+                )
+                raise Exception("Error getting stock response")
             data = response.json()
             # Load the data into a DataFrame
             df = DataFrame(data["bars"][evaluation.symbol])

@@ -20,6 +20,8 @@ class Evaluation(BaseModel):
         Literal["Acquiring"],
         Literal["Target"],
         Literal["Acquired"],
+        Literal["Seller"],
+        Literal["Buyer"],
         Literal["Merging"],
         Literal["Other"],
     ]
