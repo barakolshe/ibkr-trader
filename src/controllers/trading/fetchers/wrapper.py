@@ -67,7 +67,13 @@ def cut_relevant_df(
 
     df = df[(df.index >= start_date) & (df.index <= end_date)]
 
-    return df
+    first_of_df = arrow.get(df.index[0])
+
+    for index, row in df.iterrows():
+        if arrow.get(index) < first_of_df.shift(minutes=10) and row.volume >= 2000:  # type: ignore
+            return df
+
+    return None
 
 
 def get_historical_data_from_file(

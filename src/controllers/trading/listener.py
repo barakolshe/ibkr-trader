@@ -56,6 +56,7 @@ def callback(
 def listen_for_stocks(server_queue: Queue[Stock]) -> None:
     connection = pika.BlockingConnection(pika.ConnectionParameters(host="localhost"))
     channel = connection.channel()
+    channel.queue_declare(queue="stocks")
     channel.basic_consume(
         queue="stocks",
         auto_ack=True,

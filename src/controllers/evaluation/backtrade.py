@@ -99,4 +99,4 @@ def backtrade(
 
     kill_event: threading.Event = threading.Event()
     trader = Trader(kill_event)
-    trader.main_loop_test(evaluation_results)
+    trader.main_loop_test(evaluation_results, target_profit, stop_loss, time_limit)

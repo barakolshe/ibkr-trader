@@ -23,6 +23,10 @@ from utils.math_utils import D
 
 
 def main() -> None:
+    time_limit = 60
+    target_profit = D("0.25")
+    stop_loss = D("-0.085")
+
     server_queue = Queue[Stock]()
     server_thread = Thread(target=listen_for_stocks, args=(server_queue,), daemon=True)
     server_thread.start()
@@ -34,34 +38,42 @@ def main() -> None:
         trader_kill_event,
         server_queue,
     )
-    trader_thread = Thread(target=trader.main_loop, daemon=True)
+    trader_thread = Thread(
+        target=trader.main_loop,
+        args=(target_profit, stop_loss, time_limit),
+        daemon=True,
+    )
     trader_thread.start()
 
     wait_for_kill_all_command()
     logger.info("Sending exit signal")
     trader_kill_event.set()
     trader_thread.join()
+    logger.info("Exiting")
 
 
 def get_results(
     evaluations: list[Evaluation],
     path: str,
-    max_time_limit: int = 60,
+    max_time_limit: Optional[int] = None,
     target_profit: Optional[Decimal] = None,
     stop_loss: Optional[Decimal] = None,
 ) -> None:
     results: list[tuple[list[EvaluationResults], GroupRatio]] = []
-    # for time_limit in range(max_time_limit):
-    curr_result = iterate_evaluations(
-        evaluations,
-        60,
-        target_profit,
-        stop_loss,
+    time_limits_array = (
+        [max_time_limit] if max_time_limit is not None else range(10, 120, 10)
     )
-    if curr_result is not None:
-        results.append(curr_result)
-    if len(results) == 0:
-        return
+    for time_limit in time_limits_array:
+        curr_result = iterate_evaluations(
+            evaluations,
+            time_limit,
+            target_profit,
+            stop_loss,
+        )
+        if curr_result is not None:
+            results.append(curr_result)
+        if len(results) == 0:
+            return
     best: tuple[list[EvaluationResults], GroupRatio] = max(
         results, key=lambda result: result[1].average
     )
@@ -72,6 +84,7 @@ def get_results(
             best[0][0].duration,
             path,
         )
+        print(f"Saved to {path}")
 
 
 def trade_with_backtrader() -> None:
@@ -94,11 +107,27 @@ def trade_with_backtrader() -> None:
     )
 
 
+def get_results_filename(
+    max_time_limit: Optional[int],
+    target_profit: Optional[Decimal],
+    stop_loss: Optional[Decimal],
+) -> str:
+    file_name = f"results/{get_json_hash()}"
+    if max_time_limit is not None:
+        file_name += f"_{max_time_limit}"
+    if target_profit is not None:
+        file_name += f"_{target_profit}"
+    if stop_loss is not None:
+        file_name += f"_{stop_loss}"
+
+    return file_name
+
+
 def test_stocks() -> None:
     delay = 1
-    max_time_limit = 60
-    target_profit = D("0.4980")
-    stop_loss = D("-0.05")
+    time_limit = 60
+    target_profit = D("0.25")
+    stop_loss = D("-0.085")
 
     evaluations = get_evaluations(delay)
     json_hash = get_json_hash()
@@ -114,17 +143,13 @@ def test_stocks() -> None:
     merging_evaluations = [
         evaluation for evaluation in evaluations if evaluation.is_merging()
     ]
-    directory_path = (
-        f"{json_hash}_{delay}_{max_time_limit}"
-        if max_time_limit is None or stop_loss is None
-        else f"{json_hash}_{delay}_{max_time_limit}_{target_profit}_{stop_loss}"
-    )
+    directory_path = get_results_filename(time_limit, target_profit, stop_loss)
     if not os.path.exists(directory_path):
         os.mkdir(directory_path)
     get_results(
         target_evaluations,
         f"{directory_path}/Target.pdf",
-        max_time_limit,
+        time_limit,
         target_profit,
         stop_loss,
     )
@@ -147,4 +172,4 @@ def test_stocks() -> None:
 
 
 if __name__ == "__main__":
-    test_stocks()
+    main()

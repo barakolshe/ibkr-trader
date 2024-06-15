@@ -70,6 +70,9 @@ def strategy_factory(
                 raise Exception("first_of_day_after_start is None")
             return (curr_date - self.first_of_day_after_start).seconds // 60
 
+        def get_price(self, price: Decimal) -> Any:
+            raise NotImplementedError()
+
         def bracket_order_custom(
             self,
             limitprice: Decimal,
@@ -82,7 +85,7 @@ def strategy_factory(
         ) -> tuple[bt.Order, bt.Order, bt.Order]:
             if order_type == "long":
                 main = self.buy(
-                    price=price,
+                    price=self.get_price(price),
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
@@ -90,21 +93,21 @@ def strategy_factory(
                     outsideRth=True,
                 )
                 limit_price = self.sell(
-                    price=limitprice,
+                    price=self.get_price(limitprice),
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
-                    parentId=main.orderId,
+                    parentId=main.orderId if hasattr(main, "orderId") else None,
                     valid=children_valid,
                     outsideRth=True,
                 )
                 stop_price = self.sell(
-                    price=stopprice,
+                    price=self.get_price(stopprice),
                     size=size,
                     exectype=bt.Order.StopLimit,
-                    plimit=D(stopprice * D("0.95"), precision=D("0.05")),
+                    plimit=self.get_price(stopprice * D("0.95")),
                     transmit=True,
-                    parentId=main.orderId,
+                    parentId=main.orderId if hasattr(main, "orderId") else None,
                     valid=children_valid,
                     outsideRth=True,
                 )
@@ -118,21 +121,21 @@ def strategy_factory(
                     outsideRth=True,
                 )
                 limit_price = self.buy(
-                    price=limitprice,
+                    price=self.get_price(limitprice),
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
-                    parentId=main.orderId,
+                    parentId=main.orderId if hasattr(main, "orderId") else None,
                     valid=children_valid,
                     outsideRth=True,
                 )
                 stop_price = self.buy(
-                    price=stopprice,
+                    price=self.get_price(stopprice),
                     size=size,
                     exectype=bt.Order.StopLimit,
-                    plimit=D(stopprice * D("1.05"), precision=D("0.05")),
+                    plimit=self.get_price(stopprice * D("1.05")),
                     transmit=True,
-                    parentId=main.orderId,
+                    parentId=main.orderId if hasattr(main, "orderId") else None,
                     valid=children_valid,
                     outsideRth=True,
                 )
@@ -146,6 +149,11 @@ def strategy_factory(
             self.strategies_manager_queue.put(("OPEN", self))
 
         def notify_order(self, order: bt.Order) -> None:
+            if self.initial_order is not None and self.initial_order.status in [
+                order.Canceled
+            ]:
+                logger.info("Initial order cancelled")
+                self.stop_run()
             if order.status in [order.Submitted, order.Accepted]:
                 return
 
@@ -194,6 +202,12 @@ def strategy_factory(
             curr_datetime = (
                 arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE).datetime
             )
+            if (
+                self.event_timestamp > arrow.get(curr_datetime).shift(days=1).datetime
+                and self.initial_order is None
+            ):
+                self.stop_run()
+                return
             # Testing stuff
             response_queue: Optional[Queue[Any]] = None
             if self.should_wait_for_queue_signal():
@@ -310,14 +324,14 @@ def strategy_factory(
             if self.position.size > 0:
                 self.sell(
                     size=self.position.size,
-                    price=self.dataclose[0] * 0.98,
+                    price=self.get_price(self.dataclose[0] * 0.98),
                     exectype=bt.Order.Limit,
                     outsideRth=True,
                 )
             else:
                 self.buy(
                     size=0 - self.position.size,
-                    price=self.dataclose[0] * 1.02,
+                    price=self.get_price(self.dataclose[0] * 1.02),
                     exectype=bt.Order.Limit,
                     outsideRth=True,
                 )
@@ -348,6 +362,9 @@ def strategy_factory(
 
             def should_wait_for_queue_signal(self) -> bool:
                 return True
+
+            def get_price(self, price: Decimal) -> Any:
+                return float(price)
 
             def wait_for_queue_signal(
                 self, curr_datetime: datetime
@@ -435,6 +452,9 @@ def strategy_factory(
 
             def get_size(self, divider: int, cash: float) -> int:
                 return int(((cash * 0.001) // self.dataclose[0]) // self.divisor)
+
+            def get_price(self, price: Decimal) -> Any:
+                return D(price, precision=D("0.05"))
 
         return RealStrategy
 
