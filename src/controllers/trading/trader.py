@@ -36,9 +36,7 @@ class Trader:
     kill_event: Event
     mock_broker_queue: Queue[tuple[str, Any]]
     store: bt.stores.IBStore
-    threads: list[tuple[Thread, Optional[Queue[tuple[Queue[Any], datetime]]], Any]]
-    positions_queue: Queue[tuple[str, Any]]
-    positions_manager: PositionsManager
+    threads: list[tuple[Thread, Any]]
 
     def __init__(
         self,
@@ -47,11 +45,7 @@ class Trader:
     ) -> None:
         self.server_queue = server_queue
         self.kill_event = kill_event
-        self.positions_queue = Queue[tuple[str, Any]]()
-        self.positions_manager = PositionsManager(self.positions_queue)
         self.threads = []
-        thread = Thread(target=self.positions_manager.main_loop, daemon=True)
-        thread.start()
         self.mock_broker_queue = Queue[tuple[str, Any]]()
         mock_broker = MockBroker(self.mock_broker_queue, 5000.0)
         mock_broker_thread = Thread(target=mock_broker.main_loop, daemon=True)
@@ -108,23 +102,20 @@ class Trader:
             symbol,
             event_timestamp,
             "REAL",
-            self.positions_queue,
         )
         thread = self.run_cerebro_ibkr(symbol, strategy)
-        self.threads.append((thread, None, strategy))
+        self.threads.append((thread, strategy))
 
     def create_strategy(
         self,
         symbol: str,
         df: DataFrame,
         event_timestamp: datetime,
-        type: Literal["REAL", "TEST_REAL_TIME", "TEST"],
+        type: Literal["REAL", "TEST"],
         target_profit: Decimal,
         stop_loss: Decimal,
         max_time: int,
-        curr_datetime: Optional[datetime] = None,
     ) -> None:
-        test_next_tick_queue = Queue[tuple[Queue[Any], datetime]]()
         strategy = strategy_factory(
             target_profit,
             stop_loss,
@@ -132,17 +123,13 @@ class Trader:
             symbol,
             event_timestamp,
             type,
-            self.positions_queue,
-            self.mock_broker_queue,
-            test_next_tick_queue,
-            curr_datetime,
+            _mock_broker_queue=self.mock_broker_queue,
         )
         thread = self.run_cerebro(df, strategy)
-        self.threads.append((thread, test_next_tick_queue, strategy))
+        self.threads.append((thread, strategy))
 
     def get_existing_strategies(self) -> list[Any]:
         return_queue = Queue[list[Any]]()
-        self.positions_queue.put(("GET_STRATEGIES", return_queue))
         existing_strategies = return_queue.get()
 
         return existing_strategies
@@ -182,59 +169,6 @@ class Trader:
             except BadDataFeedException:
                 continue
 
-    def main_loop_test(
-        self,
-        evaluations_results: list[TestEvaluationResults],
-        target_profit: Decimal,
-        stop_loss: Decimal,
-        max_time: int,
-    ) -> None:
-        start_date = min(
-            [result.evaluation.timestamp for result in evaluations_results]
-        )
-        end_date = max([result.evaluation.timestamp for result in evaluations_results])
-        curr_date = start_date
-        while curr_date < end_date:
-            # Adding new stocks to the strategies
-            for evaluation_result in evaluations_results:
-                existing_symbols = [
-                    strategy.symbol for strategy in self.get_existing_strategies()
-                ]
-                if (
-                    min(
-                        evaluation_result.df.index[0],
-                        evaluation_result.evaluation.timestamp,
-                    )
-                    <= curr_date
-                    <= evaluation_result.df.index[-1]
-                    and evaluation_result.evaluation.symbol not in existing_symbols
-                ):
-                    self.create_strategy(
-                        evaluation_result.evaluation.symbol,
-                        evaluation_result.df,
-                        evaluation_result.evaluation.timestamp,
-                        "TEST_REAL_TIME",
-                        target_profit,
-                        stop_loss,
-                        max_time,
-                        curr_date,
-                    )
-                    evaluations_results.remove(evaluation_result)
-
-            for thread, test_next_tick_queue, strategy in self.threads:
-                response_queue = Queue[Any]()
-                if not test_next_tick_queue:
-                    raise Exception("Test next tick queue is None")
-                test_next_tick_queue.put((response_queue, curr_date))
-                try:
-                    response_queue.get(timeout=0.5)
-                except:
-                    if not thread.is_alive():
-                        self.threads.remove((thread, test_next_tick_queue, strategy))
-
-            # Incrementing curr date by 1 minute
-            curr_date += timedelta(minutes=1)
-
     def test_strategy(
         self,
         evaluation_results: list[TestEvaluationResults],
@@ -251,7 +185,6 @@ class Trader:
                 evaluation_result.evaluation.symbol,
                 evaluation_result.evaluation.timestamp,
                 "TEST",
-                self.positions_queue,
             )
             cerebro = bt.Cerebro()
             cerebro.broker.setcash(5000.0)
@@ -272,6 +205,6 @@ class Trader:
         )
 
     def stop_strategies(self) -> None:
-        for thread, _, strategy in self.threads:
+        for thread, strategy in self.threads:
             strategy.stop_run()
             thread.join()

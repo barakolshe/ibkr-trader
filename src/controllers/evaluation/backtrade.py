@@ -93,10 +93,8 @@ def backtrade(
         ):
             continue
         df = complete_missing_values(df)
-        if df.close[0] < 0.5:
-            continue
         evaluation_results.append(TestEvaluationResults(evaluation=evaluation, df=df))
 
     kill_event: threading.Event = threading.Event()
     trader = Trader(kill_event)
-    trader.main_loop_test(evaluation_results, target_profit, stop_loss, time_limit)
+    trader.test_strategy(evaluation_results, target_profit, stop_loss, time_limit)

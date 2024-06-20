@@ -172,4 +172,4 @@ def test_stocks() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_stocks()
