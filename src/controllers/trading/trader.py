@@ -3,17 +3,20 @@ from decimal import Decimal
 from queue import Queue
 from random import randint
 from threading import Thread, Event
+from time import strftime
 from typing import Any, Literal, Optional
+import arrow
 import backtrader as bt
 from pandas import DataFrame
 from pydantic import ConfigDict, BaseModel
 
 from atreyu_backtrader_api import IBStore
+import yfinance
 from controllers.trading.mock_broker import MockBroker
 from controllers.trading.positions_monitor import PositionsManager
 from controllers.trading.strategy import strategy_factory
 from exceptions.BadDataFeedException import BadDataFeedException
-from models.evaluation import TestEvaluationResults
+from models.evaluation import Evaluation, TestEvaluationResults
 from models.trading import Stock
 from utils.math_utils import D
 
@@ -171,30 +174,36 @@ class Trader:
 
     def test_strategy(
         self,
-        evaluation_results: list[TestEvaluationResults],
+        evaluations: list[Evaluation],
         target_profit: Decimal,
         stop_loss: Decimal,
         max_time: int,
     ) -> None:
         cash: float = 5000
-        for evaluation_result in evaluation_results:
-            strategy = strategy_factory(
-                target_profit,
-                stop_loss,
-                max_time,
-                evaluation_result.evaluation.symbol,
-                evaluation_result.evaluation.timestamp,
-                "TEST",
-            )
+        min_date = min(*[evaluation.timestamp.date() for evaluation in evaluations])
+        max_date = max(*[evaluation.timestamp.date() for evaluation in evaluations])
+        for date in range(min_date, max_date):
             cerebro = bt.Cerebro()
             cerebro.broker.setcash(5000.0)
+            evaluations = [
+                evaluation
+                for evaluation in evaluations
+                if evaluation.timestamp.date() == date
+            ]
+            for evaluation in evaluations:
+                datafeed = bt.feeds.PandasData(
+                    dataname=yfinance.download(
+                        evaluation.symbol,
+                        arrow.get(evaluation.timestamp)
+                        .shift(days=-1)
+                        .strftime("YYYY-MM-DD"),
+                        arrow.get(evaluation.timestamp).strftime("YYYY-MM-DD"),
+                        auto_adjust=True,
+                    )
+                )
+                cerebro.adddata(datafeed)
             cerebro.addstrategy(strategy)
-            datafeed = bt.feeds.PandasData(dataname=evaluation_result.df)
-            cerebro.adddata(datafeed)
-            cerebro.broker.setcash(cash)
             cerebro.run()
-            cash = cerebro.broker.get_cash()
-            print(f"{evaluation_result.evaluation.symbol}: {(cash):.2f}")
         print(
             {
                 "cash": cash,

@@ -13,28 +13,9 @@ from models.math import Extremum
 
 class Evaluation(BaseModel):
     timestamp: datetime
-    # score: Decimal
     symbol: str
-    state: Union[
-        Literal["Acquirer"],
-        Literal["Acquiring"],
-        Literal["Target"],
-        Literal["Acquired"],
-        Literal["Seller"],
-        Literal["Buyer"],
-        Literal["Merging"],
-        Literal["Other"],
-    ]
+    exchange: Optional[str] = None
     url: str
-
-    def is_target(self) -> bool:
-        return self.state == "Target" or self.state == "Acquired"
-
-    def is_acquirer(self) -> bool:
-        return self.state == "Acquirer" or self.state == "Acquiring"
-
-    def is_merging(self) -> bool:
-        return self.state == "Merging"
 
     def get_csv_directory_path(self) -> str:
         return f"data/stocks/{self.symbol}"
