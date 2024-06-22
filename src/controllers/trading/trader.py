@@ -1,24 +1,22 @@
 from datetime import timedelta, datetime
-from decimal import Decimal
 from queue import Queue
 from random import randint
 from threading import Thread, Event
-from time import strftime
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 import arrow
 import backtrader as bt
 from pandas import DataFrame
 from pydantic import ConfigDict, BaseModel
+from ateryu_backtrader_api import IBData
 
 from atreyu_backtrader_api import IBStore
 import yfinance
+from consts.time_consts import TIMEZONE
 from controllers.trading.mock_broker import MockBroker
-from controllers.trading.positions_monitor import PositionsManager
 from controllers.trading.strategy import strategy_factory
-from exceptions.BadDataFeedException import BadDataFeedException
-from models.evaluation import Evaluation, TestEvaluationResults
+from models.evaluation import Evaluation
 from models.trading import Stock
-from utils.math_utils import D
+from logger.logger import logger
 
 
 class StrategyManager(BaseModel):
@@ -36,14 +34,14 @@ class StrategyManager(BaseModel):
 
 class Trader:
     server_queue: Optional[Queue[Stock]] = None
-    kill_event: Event
+    kill_event: Optional[Event] = None
     mock_broker_queue: Queue[tuple[str, Any]]
     store: bt.stores.IBStore
     threads: list[tuple[Thread, Any]]
 
     def __init__(
         self,
-        kill_event: Event,
+        kill_event: Optional[Event] = None,
         server_queue: Optional[Queue[Stock]] = None,
     ) -> None:
         self.server_queue = server_queue
@@ -60,158 +58,93 @@ class Trader:
         self.mock_broker_queue.put(("GET", response_queue))
         return response_queue.get()
 
-    def run_cerebro(self, df: DataFrame, strategy: bt.Strategy) -> Thread:
-        cerebro = bt.Cerebro()
-        cerebro.broker.set_cash(self.get_cash())
-        cerebro.addstrategy(strategy)
-        datafeed = bt.feeds.PandasData(dataname=df)
-        cerebro.adddata(datafeed)
-        thread = Thread(target=cerebro.run, daemon=True)
-        thread.start()
-        return thread
+    # def main_loop(
+    #     self, target_profit: Decimal, stop_loss: Decimal, max_time: int
+    # ) -> None:
+    #     while True:
+    #         if not self.server_queue:
+    #             raise Exception("Trade queue is None")
+    #         try:
+    #             stock = self.server_queue.get(timeout=10)
+    #         except Exception as e:
+    #             if self.kill_event.is_set():
+    #                 self.stop_strategies()
+    #                 self.store.conn.disconnect()
+    #                 return
+    #             continue
 
-    def run_cerebro_ibkr(self, symbol: str, strategy: bt.Strategy) -> Thread:
-        cerebro = bt.Cerebro()
-        cerebro.setbroker(self.store.getbroker())
-        cerebro.addstrategy(strategy)
-        # try:
-        data = self.store.getdata(
-            name=symbol,  # Data name
-            dataname=symbol,  # Symbol name
-            secType="STK",  # SecurityType is STOCK
-            exchange="SMART",  # Trading exchange IB's SMART exchange
-            currency="USD",  # Currency of SecurityType
-        )
-        # except:
-        #     logger.info(f"Bad datafeed {symbol}", exc_info=True)
-        #     raise BadDataFeedException()
-        cerebro.adddata(data)
-        thread = Thread(target=cerebro.run, daemon=True)
-        thread.start()
-        return thread
+    #         # Filtering existing stocks that already have strategies
+    #         existing_symbols: list[str] = [
+    #             strategy.symbol for strategy in existing_strategies
+    #         ]
+    #         if stock.symbol in existing_symbols:
+    #             continue
 
-    def create_strategy_ibkr(
-        self,
-        symbol: str,
-        event_timestamp: datetime,
-        target_profit: Decimal,
-        stop_loss: Decimal,
-        max_time: int,
-    ) -> None:
-        strategy = strategy_factory(
-            target_profit,
-            stop_loss,
-            max_time,
-            symbol,
-            event_timestamp,
-            "REAL",
-        )
-        thread = self.run_cerebro_ibkr(symbol, strategy)
-        self.threads.append((thread, strategy))
-
-    def create_strategy(
-        self,
-        symbol: str,
-        df: DataFrame,
-        event_timestamp: datetime,
-        type: Literal["REAL", "TEST"],
-        target_profit: Decimal,
-        stop_loss: Decimal,
-        max_time: int,
-    ) -> None:
-        strategy = strategy_factory(
-            target_profit,
-            stop_loss,
-            max_time,
-            symbol,
-            event_timestamp,
-            type,
-            _mock_broker_queue=self.mock_broker_queue,
-        )
-        thread = self.run_cerebro(df, strategy)
-        self.threads.append((thread, strategy))
-
-    def get_existing_strategies(self) -> list[Any]:
-        return_queue = Queue[list[Any]]()
-        existing_strategies = return_queue.get()
-
-        return existing_strategies
-
-    def main_loop(
-        self, target_profit: Decimal, stop_loss: Decimal, max_time: int
-    ) -> None:
-        while True:
-            if not self.server_queue:
-                raise Exception("Trade queue is None")
-            try:
-                stock = self.server_queue.get(timeout=10)
-            except Exception as e:
-                if self.kill_event.is_set():
-                    self.stop_strategies()
-                    self.store.conn.disconnect()
-                    return
-                continue
-
-            existing_strategies = self.get_existing_strategies()
-
-            # Filtering existing stocks that already have strategies
-            existing_symbols: list[str] = [
-                strategy.symbol for strategy in existing_strategies
-            ]
-            if stock.symbol in existing_symbols:
-                continue
-
-            try:
-                self.create_strategy_ibkr(
-                    stock.symbol,
-                    stock.article.datetime,
-                    target_profit,
-                    stop_loss,
-                    max_time,
-                )
-            except BadDataFeedException:
-                continue
+    #         try:
+    #             self.create_strategy_ibkr(
+    #                 stock.symbol,
+    #                 stock.article.datetime,
+    #                 target_profit,
+    #                 stop_loss,
+    #                 max_time,
+    #             )
+    #         except BadDataFeedException:
+    #             continue
 
     def test_strategy(
         self,
         evaluations: list[Evaluation],
-        target_profit: Decimal,
-        stop_loss: Decimal,
-        max_time: int,
     ) -> None:
         cash: float = 5000
-        min_date = min(*[evaluation.timestamp.date() for evaluation in evaluations])
-        max_date = max(*[evaluation.timestamp.date() for evaluation in evaluations])
-        for date in range(min_date, max_date):
+        min_date = min(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
+        max_date = max(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
+        min_date.replace(hour=0, minute=0, second=0)
+        max_date.replace(hour=0, minute=0, second=0)
+
+        date_range = [
+            min_date.datetime + timedelta(days=delta)
+            for delta in range((max_date.datetime - min_date.datetime).days + 1)
+        ]
+        for date in date_range:
             cerebro = bt.Cerebro()
-            cerebro.broker.setcash(5000.0)
-            evaluations = [
+            cerebro.broker.setcash(cash)
+            filtered_evaluations = [
                 evaluation
                 for evaluation in evaluations
-                if evaluation.timestamp.date() == date
+                if arrow.get(date).shift(days=-1).replace(hour=16, minute=0, second=0)
+                < evaluation.timestamp
+                < arrow.get(date).replace(hour=9, minute=30, second=0)
             ]
-            for evaluation in evaluations:
-                datafeed = bt.feeds.PandasData(
-                    dataname=yfinance.download(
-                        evaluation.symbol,
-                        arrow.get(evaluation.timestamp)
-                        .shift(days=-1)
-                        .strftime("YYYY-MM-DD"),
-                        arrow.get(evaluation.timestamp).strftime("YYYY-MM-DD"),
-                        auto_adjust=True,
-                    )
+            for evaluation in filtered_evaluations:
+                if (arrow.now(tz=TIMEZONE).datetime - evaluation.timestamp).days >= 40:
+                    continue
+                # try:
+                data = yfinance.Ticker(evaluation.symbol).history(
+                    start=arrow.get(date).shift(days=-1).datetime.strftime("%Y-%m-%d"),
+                    end=arrow.get(date).shift(days=1).datetime.strftime("%Y-%m-%d"),
+                    # auto_adjust=True,
+                    interval="2m",
                 )
+                datafeed = bt.feeds.PandasData(dataname=data)
+                # except Exception:
+                #     logger.info(f"Cant get data for {evaluation.symbol}")
+                #     continue
+                logger.info(f"Adding data for {evaluation.symbol} {date}")
                 cerebro.adddata(datafeed)
+            strategy = strategy_factory(
+                [evaluation.symbol for evaluation in filtered_evaluations],
+                arrow.get(date).datetime,
+                "TEST",
+                _mock_broker_queue=self.mock_broker_queue,
+            )
             cerebro.addstrategy(strategy)
             cerebro.run()
-        print(
-            {
-                "cash": cash,
-                "target_profit": float(target_profit),
-                "stop_loss": float(stop_loss),
-                "max_time": max_time,
-            }
-        )
+            cash = cerebro.broker.getcash()
+            print(
+                {
+                    "cash": cash,
+                }
+            )
 
     def stop_strategies(self) -> None:
         for thread, strategy in self.threads:

@@ -1,347 +1,368 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 from queue import Queue
-import time
 from typing import Any, Literal, Optional, Union
 import arrow
 import backtrader as bt
+from numpy import average
+from pydantic import BaseModel, ConfigDict
 
 from consts.time_consts import TIMEZONE
 from utils.math_utils import D
 from logger.logger import logger
 
 
-def is_order_completed(order: bt.Order) -> bool:
-    return order.status in [bt.Order.Completed]
+class DataManager(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    data: Any
+    symbol: Optional[str] = None
+    score: Optional[Decimal] = None
+    average_volume: Optional[Decimal] = None
+    average_close_gap: Optional[Decimal] = None
+    initial_order: Optional[bt.Order] = None
+    limit_price_order: Optional[bt.Order] = None
+    stop_price_order: Optional[bt.Order] = None
+
+    market_order: Optional[bt.Order] = None
 
 
 def strategy_factory(
-    _target_profit: Decimal,
-    _stop_loss: Decimal,
-    _max_time: int,
-    _symbol: str,
-    _event_timestamp: datetime,
+    symbols: list[str],
+    _today: datetime,
     type: Literal["REAL", "TEST"],
-    _target_price: Optional[Decimal] = None,
     _mock_broker_queue: Optional[Queue[tuple[str, Any]]] = None,
 ) -> bt.Strategy:
 
     class BaseStrategy(bt.Strategy):  # type: ignore
-        symbol: str = _symbol
-        event_timestamp: datetime = _event_timestamp
-
-        target_profit: Decimal = _target_profit
-        stop_loss: Decimal = _stop_loss
-        max_time: int = _max_time
-        price: Optional[Decimal] = _target_price
+        today: datetime = _today
 
         data_ready: bool = False
-
-        divisor: Optional[int] = None
-
-        initial_order: Optional[bt.Order] = None
-        limit_price_order: Optional[bt.Order] = None
-        stop_price_order: Optional[bt.Order] = None
-        orders: list[bt.Order] = []
-
-        # For missing minutes
-        first_of_day_after_start: Optional[datetime] = None
-
-        def get_cash(self) -> float:
-            raise NotImplementedError()
+        is_in_position: bool = False
+        did_leave_position: bool = False
+        datas_manager: list[DataManager] = []
 
         def __init__(self) -> None:
-            self.dataclose = self.data.close
-            self.strategies_manager_queue.put(("ADD", self))
+            super().__init__()
+            for index, data in enumerate(self.datas):
+                self.datas_manager.append(DataManager(data=data, symbol=symbols[index]))
+
+        def get_cash(self) -> float:
+            return self.broker.getcash()  # type: ignore
 
         def notify_data(self, data: Any, status: int) -> None:
             if status == data.LIVE:
                 self.data_ready = True
 
-        def count_seconds_delay(self, curr_date: datetime) -> int:
-            if self.first_of_day_after_start is None:
-                raise Exception("first_of_day_after_start is None")
-            return (curr_date - self.first_of_day_after_start).seconds
+        def get_price(self, price: float) -> float:
+            raise NotImplementedError()
 
-        def get_price(self, price: Decimal) -> Any:
+        def notify_order(self, order: bt.Order) -> None:
+            curr_datetime = arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE)
+            symbol = ""
+            for data_manager in self.datas_manager:
+                if order in [
+                    data_manager.initial_order,
+                    data_manager.limit_price_order,
+                    data_manager.stop_price_order,
+                    data_manager.market_order,
+                ]:
+                    if data_manager.symbol is None:
+                        raise Exception("Symbol is None")
+                    symbol = data_manager.symbol
+            type = ""
+            if order.isbuy():
+                type = "Buy"
+            else:
+                type = "Sell"
+
+            if order.status in [order.Accepted]:
+                return
+
+            if order.status in [order.Canceled]:
+                logger.info(f"{type} cancelled {symbol} {curr_datetime} {order.size}")
+                return
+
+            if order.status in [order.Expired]:
+                logger.info(f"{type} expired {symbol} {curr_datetime} {order.size}")
+                return
+
+            if order.status in [order.Completed]:
+                logger.info(
+                    f"{type} completed {symbol} {curr_datetime} order_value: {(0 - order.size) * order.executed.price}"
+                )
+                self.bar_executed = len(self)
+
+            if self.did_leave_position and self.position.size == 0:
+                self.stop_run()
+
+        def stop_run(self) -> None:
+            print("Stopping run")
+            self.env.runstop()
+
+        def buy_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
+            raise NotImplementedError()
+
+        def sell_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
             raise NotImplementedError()
 
         def bracket_order_custom(
             self,
-            limitprice: Decimal,
-            price: Decimal,
-            stopprice: Decimal,
+            data: Any,
+            limitprice: float,
+            price: float,
+            stopprice: float,
             size: float,
-            parent_valid: timedelta,
-            children_valid: timedelta,
+            parent_valid: timedelta | datetime,
+            children_valid: timedelta | datetime,
             order_type: Union[Literal["long"], Literal["short"]],
         ) -> tuple[bt.Order, bt.Order, bt.Order]:
             if order_type == "long":
-                main = self.buy(
-                    price=self.get_price(price),
+                main = self.buy_custom(
+                    data=data,
+                    price=self.get_price(price) * 1.005,
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
                     valid=parent_valid,
                     outsideRth=True,
                 )
-                limit_price = self.sell(
+                limit_price = self.sell_custom(
+                    data=data,
                     price=self.get_price(limitprice),
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
-                    parentId=main.orderId if hasattr(main, "orderId") else None,
+                    parent=main,
                     valid=children_valid,
                     outsideRth=True,
                 )
-                stop_price = self.sell(
+                stop_price = self.sell_custom(
+                    data=data,
                     price=self.get_price(stopprice),
                     size=size,
                     exectype=bt.Order.StopLimit,
-                    plimit=self.get_price(stopprice * D("0.95")),
+                    plimit=self.get_price(stopprice * 0.95),
                     transmit=True,
-                    parentId=main.orderId if hasattr(main, "orderId") else None,
+                    parent=main,
                     valid=children_valid,
-                    outsideRth=True,
                 )
             else:
-                main = self.sell(
-                    price=price,
+                main = self.sell_custom(
+                    data=data,
+                    price=price * 0.995,
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
                     valid=parent_valid,
-                    outsideRth=True,
                 )
-                limit_price = self.buy(
+                limit_price = self.buy_custom(
+                    data=data,
                     price=self.get_price(limitprice),
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
-                    parentId=main.orderId if hasattr(main, "orderId") else None,
+                    parent=main,
                     valid=children_valid,
-                    outsideRth=True,
                 )
-                stop_price = self.buy(
+                stop_price = self.buy_custom(
+                    data=data,
                     price=self.get_price(stopprice),
                     size=size,
                     exectype=bt.Order.StopLimit,
-                    plimit=self.get_price(stopprice * D("1.05")),
+                    plimit=self.get_price(stopprice * 1.05),
                     transmit=True,
-                    parentId=main.orderId if hasattr(main, "orderId") else None,
+                    parent=main,
                     valid=children_valid,
-                    outsideRth=True,
                 )
 
             return main, limit_price, stop_price
 
-        def order_filled_follow_up_actions(self, order: bt.Order) -> None:
-            raise NotImplementedError()
-
-        def order_submitted_follow_up_actions(self) -> None:
-            self.strategies_manager_queue.put(("OPEN", self))
-
-        def notify_order(self, order: bt.Order) -> None:
-            if self.initial_order is not None and self.initial_order.status in [
-                order.Canceled
-            ]:
-                logger.info("Initial order cancelled")
-                self.stop_run()
-            if order.status in [order.Submitted, order.Accepted]:
-                return
-
-            if order.status in [order.Canceled]:
-                logger.info("Order Cancelled")
-                return
-
-            if order.status in [order.Completed]:
-                if order.isbuy():
-                    logger.info(
-                        f"Buy EXECUTED, {order.executed.price:.2f}, {self.symbol}, divider: {self.divisor}"
-                    )
-                elif order.issell():
-                    logger.info(
-                        f"SELL EXECUTED, {order.executed.price:.2f}, {self.symbol}"
-                    )
-                self.order_filled_follow_up_actions(order)
-                self.bar_executed = len(self)
-                # Leaving if the position was closed
-                if self.position.size == 0:
-                    self.strategies_manager_queue.put(("CLOSE", self))
-                    self.stop_run()
-                    return
-
-        def stop_run(self) -> None:
-            self.env.runstop()
-
-        def should_start_trading(self, curr_datetime: datetime) -> bool:
-            raise NotImplementedError()
-
-        def handle_position_without_price(self, seconds_delay: int) -> None:
-            if self.data.volume[-1:-60] is None:
-                return
-
-        def handle_position_with_price(self, seconds_delay: int) -> None:
-            return
-
         def next(self) -> None:
-            curr_datetime = (
-                arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE).datetime
-            )
-            if (
-                self.event_timestamp
-                > arrow.get(curr_datetime)
-                .shift(days=1)
-                .datetime  # TODO change when weekend
-                and self.initial_order is None
+            curr_datetime = arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE)
+            if self.did_leave_position:
+                return
+
+            # Checking if time is up for the day
+            if curr_datetime >= arrow.get(self.today).replace(
+                hour=15, minute=0, second=0
             ):
-                self.stop_run()
+                for data_manager in self.datas_manager:
+                    if (
+                        data_manager.initial_order is None
+                        or data_manager.initial_order.status not in [bt.Order.Completed]
+                        or data_manager.limit_price_order.status in [bt.Order.Completed]
+                        or data_manager.stop_price_order.status in [bt.Order.Completed]
+                    ):
+                        continue
+                    if data_manager.stop_price_order.status not in [
+                        bt.Order.Completed
+                    ] and data_manager.stop_price_order.status not in [
+                        bt.Order.Completed
+                    ]:
+                        if data_manager.initial_order.isbuy():
+                            data_manager.market_order = self.sell_custom(
+                                data=data_manager.data,
+                                size=data_manager.initial_order.size,
+                                exectype=bt.Order.Market,
+                            )
+                        else:
+                            data_manager.market_order = self.buy_custom(
+                                data=data_manager.data,
+                                size=data_manager.initial_order.size,
+                                exectype=bt.Order.Market,
+                            )
+                self.did_leave_position = True
+
+            if (
+                not (
+                    arrow.get(self.today).replace(hour=11, minute=0, second=0)
+                    <= curr_datetime
+                    < arrow.get(self.today).replace(hour=11, minute=30)
+                )
+                or self.is_in_position
+            ):
                 return
+            # Iterating datas and checking stats
+            for data_manager in self.datas_manager:
+                data = data_manager.data
+                data_manager.average_volume = average(
+                    sum(data.volume.get(size=30))
+                ) * average(sum(data.open.get(size=30)))
+                data_manager.average_close_gap = data.close[-1] - data.close[-30]
 
-            # Checking if i should start trading
-            if not self.should_start_trading(curr_datetime):
-                return
+            # Giving score based on stats
+            for data_manager in self.datas_manager:
+                if (
+                    data_manager.average_volume is None
+                    or data_manager.average_volume < D("10000")
+                    or data_manager.average_close_gap == D("0")
+                ):
+                    data_manager.score = D("0")
+                    continue
+                else:
+                    data_manager.score = D("1")
 
-            # Setting the first tick of the day
-            if self.first_of_day_after_start is None:
-                self.first_of_day_after_start = curr_datetime
+            # Entering position with stocks with highest scores
+            filtered_scores: list[DataManager] = []
+            for data_manager in self.datas_manager:
+                if data_manager.score is not None and data_manager.score > D("0"):
+                    filtered_scores.append(data_manager)
+            sorted_scores: list[DataManager] = sorted(
+                filtered_scores, key=lambda x: x.score, reverse=True  # type: ignore
+            )[0:3]
+            for data_manager in sorted_scores:
+                data = data_manager.data
+                size = self.get_size(data.close[0]) // len(sorted_scores)
+                if (
+                    data_manager.average_close_gap is not None
+                    and data_manager.average_close_gap > D("0")
+                ):
+                    (
+                        data_manager.initial_order,
+                        data_manager.limit_price_order,
+                        data_manager.stop_price_order,
+                    ) = self.bracket_order_custom(
+                        data=data,
+                        size=size,
+                        limitprice=data.close[0] * 1.05,
+                        price=data.close[0],
+                        stopprice=data.close[0] * 0.98,
+                        parent_valid=timedelta(minutes=30),
+                        children_valid=arrow.get(self.today)
+                        .replace(hour=15, minute=0, second=0)
+                        .datetime,
+                        order_type="long",
+                    )
+                else:
+                    (
+                        data_manager.initial_order,
+                        data_manager.limit_price_order,
+                        data_manager.stop_price_order,
+                    ) = self.bracket_order_custom(
+                        data=data,
+                        size=size,
+                        limitprice=data.close[0] * 0.95,
+                        price=data.close[0],
+                        stopprice=data.close[0] * 1.02,
+                        parent_valid=timedelta(minutes=30),
+                        children_valid=arrow.get(self.today)
+                        .replace(hour=15, minute=0, second=0)
+                        .datetime,
+                        order_type="short",
+                    )
+                self.is_in_position = True
 
-            time_delay = self.count_seconds_delay(curr_datetime)
-            # Buy opening position
-
-            if self.price is not None:
-                self.handle_position_with_price(time_delay)
-            else:
-                self.handle_position_without_price(time_delay)
-
-        def cancel_all_orders(self) -> None:
-            for order in self.orders:
-                self.cancel(order)
-
-        def get_size(self) -> int:
+        def get_size(self, price: Decimal) -> int:
             raise NotImplementedError()
-
-        def move_into_position(self) -> None:
-            size = self.get_size()
-            if size == 0:
-                return
-            if self.target_profit > 0:
-                (
-                    self.initial_order,
-                    self.limit_price_order,
-                    self.stop_price_order,
-                ) = self.bracket_order_custom(
-                    limitprice=D(
-                        (D(self.dataclose[0]) * (1 + self.target_profit)),
-                        precision=D("0.05"),
-                    ),
-                    price=D(self.dataclose[0] * 1.01, precision=D("0.05")),
-                    stopprice=D(
-                        float(D(self.dataclose[0]) * (1 + self.stop_loss)),
-                        precision=D("0.05"),
-                    ),
-                    size=size,
-                    parent_valid=timedelta(minutes=5),
-                    children_valid=timedelta(minutes=self.max_time),
-                    order_type="long",
-                )
-            else:
-                (
-                    self.initial_order,
-                    self.limit_price_order,
-                    self.stop_price_order,
-                ) = self.bracket_order_custom(
-                    limitprice=D(
-                        D(self.dataclose[0]) * (1 + self.target_profit),
-                        precision=D("0.05"),
-                    ),
-                    price=D(self.dataclose[0] * 0.99, precision=D("0.05")),
-                    stopprice=D(
-                        (D(self.dataclose[0]) * (1 + self.stop_loss)),
-                        precision=D("0.05"),
-                    ),
-                    size=size,
-                    parent_valid=timedelta(minutes=5),
-                    children_valid=timedelta(minutes=self.max_time),
-                    order_type="short",
-                )
-            self.order_submitted_follow_up_actions()
-            self.orders = [
-                self.initial_order,
-                self.limit_price_order,
-                self.stop_price_order,
-            ]
-
-        def move_out_of_position(self, curr_datetime: datetime) -> None:
-            if self.position.size > 0:
-                self.sell(
-                    size=self.position.size,
-                    price=self.get_price(self.dataclose[0] * 0.98),
-                    exectype=bt.Order.Limit,
-                    outsideRth=True,
-                )
-            else:
-                self.buy(
-                    size=0 - self.position.size,
-                    price=self.get_price(self.dataclose[0] * 1.02),
-                    exectype=bt.Order.Limit,
-                    outsideRth=True,
-                )
 
     if type == "TEST":
 
         class TestStrategy(BaseStrategy):
 
-            def __init__(self) -> None:
-                super().__init__()
+            def buy_custom(
+                self, parent: Optional[bt.Order] = None, **kwargs: Any
+            ) -> bt.Order:
+                return self.buy(
+                    parent=parent,
+                    **kwargs,
+                )
 
-            def order_filled_follow_up_actions(self, order: bt.Order) -> None:
-                self.set_cash(self.get_cash() - (order.executed.price * order.size))
+            def sell_custom(
+                self, parent: Optional[bt.Order] = None, **kwargs: Any
+            ) -> bt.Order:
+                return self.sell(
+                    parent=parent,
+                    **kwargs,
+                )
 
-            def get_price(self, price: Decimal) -> Any:
-                return float(price)
-
-            def should_start_trading(self, curr_datetime: datetime) -> bool:
-                return curr_datetime >= self.event_timestamp
-
-            def get_cash(self) -> float:
-                response_queue = Queue[float]()
-                if _mock_broker_queue is None:
-                    raise Exception("Using test wrong")
-                _mock_broker_queue.put(("GET", response_queue))
-                return response_queue.get()
+            def get_price(self, price: float) -> float:
+                return price
 
             def set_cash(self, cash: float) -> None:
                 if _mock_broker_queue is None:
                     raise Exception("Using test wrong")
                 _mock_broker_queue.put(("SET", cash))
 
-            def get_size(self) -> int:
-                return int(1000 // self.dataclose[0])
+            def get_size(self, price: Decimal) -> int:
+                return int(D(min(self.get_cash() * 0.98, 5000 * 0.98)) // D(price))
 
         return TestStrategy
 
     if type == "REAL":
 
         class RealStrategy(BaseStrategy):
-            def __init__(self) -> None:
-                self.start_time = arrow.now(tz=TIMEZONE).datetime
-                super().__init__()
-                logger.info(f"Started Strategy {self.symbol}, {self.start_time}")
+            def buy_csutom(
+                self, parent: Optional[bt.Order] = None, **kwargs: Any
+            ) -> bt.Order:
+                return self.buy(
+                    parentId=(
+                        parent.orderId
+                        if parent is not None and hasattr(parent, "orderId")
+                        else None
+                    ),
+                    **kwargs,
+                )
 
-            def order_filled_follow_up_actions(self, order: bt.Order) -> None:
-                return
-
-            def get_cash(self) -> float:
-                return self.broker.getcash()  # type: ignore
+            def sell_custom(
+                self, parent: Optional[bt.Order] = None, **kwargs: Any
+            ) -> bt.Order:
+                return self.sell(
+                    parentId=(
+                        parent.orderId
+                        if parent is not None and hasattr(parent, "orderId")
+                        else None
+                    ),
+                    **kwargs,
+                )
 
             def should_start_trading(self, curr_datetime: datetime) -> bool:
                 return self.data_ready
 
-            def get_size(self) -> int:
-                return int(1000 // self.dataclose[0])
+            def get_size(self, price: Decimal) -> int:
+                return int(D(min(self.get_cash(), 5000)) // price)
 
-            def get_price(self, price: Decimal) -> Any:
-                return D(price, precision=D("0.05"))
+            def get_price(self, price: float) -> float:
+                return float(D(price, precision=D("0.05")))
 
         return RealStrategy
