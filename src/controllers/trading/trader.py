@@ -2,16 +2,18 @@ from datetime import timedelta, datetime
 from queue import Queue
 from random import randint
 from threading import Thread, Event
+import time
 from typing import Any, Optional
 import arrow
 import backtrader as bt
 from pandas import DataFrame
 from pydantic import ConfigDict, BaseModel
-from ateryu_backtrader_api import IBData
+from atreyu_backtrader_api import IBData
 
-from atreyu_backtrader_api import IBStore
-import yfinance
+from atreyu_backtrader_api import IBStore, IBData
 from consts.time_consts import TIMEZONE
+from controllers.trading.commision import IBKRComission
+from controllers.trading.fetchers.wrapper import get_historical_data
 from controllers.trading.mock_broker import MockBroker
 from controllers.trading.strategy import strategy_factory
 from models.evaluation import Evaluation
@@ -36,7 +38,7 @@ class Trader:
     server_queue: Optional[Queue[Stock]] = None
     kill_event: Optional[Event] = None
     mock_broker_queue: Queue[tuple[str, Any]]
-    store: bt.stores.IBStore
+    # store: bt.stores.IBStore
     threads: list[tuple[Thread, Any]]
 
     def __init__(
@@ -48,10 +50,9 @@ class Trader:
         self.kill_event = kill_event
         self.threads = []
         self.mock_broker_queue = Queue[tuple[str, Any]]()
-        mock_broker = MockBroker(self.mock_broker_queue, 5000.0)
+        mock_broker = MockBroker(self.mock_broker_queue, 40000.0)
         mock_broker_thread = Thread(target=mock_broker.main_loop, daemon=True)
         mock_broker_thread.start()
-        self.store = IBStore(host="127.0.0.1", port=7497, clientId=randint(0, 100))
 
     def get_cash(self) -> float:
         response_queue = Queue[float]()
@@ -95,7 +96,7 @@ class Trader:
         self,
         evaluations: list[Evaluation],
     ) -> None:
-        cash: float = 5000
+        cash: float = 40000
         min_date = min(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
         max_date = max(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
         min_date.replace(hour=0, minute=0, second=0)
@@ -106,45 +107,72 @@ class Trader:
             for delta in range((max_date.datetime - min_date.datetime).days + 1)
         ]
         for date in date_range:
-            cerebro = bt.Cerebro()
-            cerebro.broker.setcash(cash)
-            filtered_evaluations = [
-                evaluation
-                for evaluation in evaluations
-                if arrow.get(date).shift(days=-1).replace(hour=16, minute=0, second=0)
-                < evaluation.timestamp
-                < arrow.get(date).replace(hour=9, minute=30, second=0)
-            ]
-            for evaluation in filtered_evaluations:
-                if (arrow.now(tz=TIMEZONE).datetime - evaluation.timestamp).days >= 40:
+            is_error = True
+            while is_error:
+                cerebro = bt.Cerebro()
+                cerebro.broker.setcash(cash)
+                filtered_evaluations = [
+                    evaluation
+                    for evaluation in evaluations
+                    if arrow.get(date)
+                    .shift(days=-1)
+                    .replace(hour=16, minute=0, second=0)
+                    < evaluation.timestamp
+                    < arrow.get(date).replace(hour=9, minute=30, second=0)
+                ]
+                if len(filtered_evaluations) == 0:
+                    is_error = False
                     continue
-                # try:
-                data = yfinance.Ticker(evaluation.symbol).history(
-                    start=arrow.get(date).shift(days=-1).datetime.strftime("%Y-%m-%d"),
-                    end=arrow.get(date).shift(days=1).datetime.strftime("%Y-%m-%d"),
-                    # auto_adjust=True,
-                    interval="2m",
+                # self.store = IBStore(
+                #     host="127.0.0.1", port=7497, clientId=randint(0, 500), _debug=True
+                # )
+                for evaluation in filtered_evaluations:
+                    print(arrow.get(date).shift(days=1).datetime.replace(tzinfo=None))
+                    # data = self.store.getdata(
+                    #     name=evaluation.symbol,  # Data name
+                    #     dataname=evaluation.symbol,  # Symbol name
+                    #     secType="STK",  # SecurityType is STOCK
+                    #     exchange="SMART",  # Trading exchange IB's SMART exchange
+                    #     currency="USD",  # Currency of SecurityType
+                    #     fromdate=arrow.get(
+                    #         arrow.get(date).shift(days=-1).date()
+                    #     ).datetime.replace(tzinfo=None),
+                    #     todate=arrow.get(
+                    #         arrow.get(date).shift(days=1).date()
+                    #     ).datetime.replace(tzinfo=None),
+                    #     timeframe=bt.TimeFrame.Minutes,
+                    #     historical=True,
+                    #     # what="MIDPOINT",
+                    #     rtbar=True,
+                    # )
+                    data = get_historical_data(evaluation, 60 * 24 * 2)
+                    if data is None:
+                        continue
+                    dataframe = bt.feeds.PandasData(dataname=data)
+                    logger.info(f"Adding data for {evaluation.symbol} {date}")
+                    cerebro.adddata(dataframe)
+                is_working_event: Event = Event()
+                comminfo = IBKRComission()  # 0.5%
+                cerebro.broker.addcommissioninfo(comminfo)
+                cerebro.broker.set_filler(bt.broker.filler.FixedSize)
+                strategy = strategy_factory(
+                    [evaluation.symbol for evaluation in filtered_evaluations],
+                    arrow.get(date).datetime,
+                    60,
+                    is_working_event,
+                    "TEST",
+                    _mock_broker_queue=self.mock_broker_queue,
                 )
-                datafeed = bt.feeds.PandasData(dataname=data)
-                # except Exception:
-                #     logger.info(f"Cant get data for {evaluation.symbol}")
-                #     continue
-                logger.info(f"Adding data for {evaluation.symbol} {date}")
-                cerebro.adddata(datafeed)
-            strategy = strategy_factory(
-                [evaluation.symbol for evaluation in filtered_evaluations],
-                arrow.get(date).datetime,
-                "TEST",
-                _mock_broker_queue=self.mock_broker_queue,
-            )
-            cerebro.addstrategy(strategy)
-            cerebro.run()
-            cash = cerebro.broker.getcash()
-            print(
-                {
-                    "cash": cash,
-                }
-            )
+                cerebro.addstrategy(strategy)
+
+                cerebro.run()
+
+                IBStore.destroy()
+                self.store = None
+                cash = cerebro.broker.getcash()
+                print("cash: ", cash)
+
+                is_error = False
 
     def stop_strategies(self) -> None:
         for thread, strategy in self.threads:

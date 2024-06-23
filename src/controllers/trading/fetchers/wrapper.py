@@ -7,7 +7,7 @@ from pandas import DataFrame
 import os
 import pandas as pd
 import requests  # type: ignore
-from datetime import datetime
+from datetime import datetime, tzinfo
 
 from consts.time_consts import (
     ALPACA_TIME_FORMAT,
@@ -94,26 +94,27 @@ def get_historical_data(
     time_limit: int,
 ) -> Optional[DataFrame]:
     start_date = arrow.get(evaluation.timestamp, TIMEZONE)
-    end_date = start_date.shift(minutes=time_limit)
-    if evaluation.does_csv_file_exist():
-        if evaluation.is_stock_known_invalid() or evaluation.symbol == "":
-            return None
-        matching_file = evaluation.get_matching_csv(
-            start_date.datetime, end_date.datetime
-        )
-        if matching_file:
-            return get_historical_data_from_file(
-                evaluation,
-                matching_file,
-                start_date.datetime,
-                end_date.datetime,
-                time_limit,
-            )
+    end_date = arrow.get(evaluation.timestamp, TIMEZONE).shift(days=1)
+    # if evaluation.does_csv_file_exist():
+    #     if evaluation.is_stock_known_invalid() or evaluation.symbol == "":
+    #         return None
+    #     matching_file = evaluation.get_matching_csv(
+    #         start_date.datetime, end_date.datetime
+    #     )
+    #     if matching_file:
+    #         return get_historical_data_from_file(
+    #             evaluation,
+    #             matching_file,
+    #             start_date.datetime,
+    #             end_date.datetime,
+    #             time_limit,
+    #         )
     df = get_stock_response(evaluation, start_date, end_date)
     if df is None:
         return None
+    df = complete_missing_values(df)
 
-    return cut_relevant_df(df, start_date.datetime, end_date.datetime, time_limit)
+    return df
 
 
 def complete_missing_values(df: DataFrame) -> DataFrame:
@@ -123,7 +124,7 @@ def complete_missing_values(df: DataFrame) -> DataFrame:
 
     # Create a date range from the first to the last timestamp at minute frequency
     full_range = pd.date_range(
-        start=df.index[0].floor("T"), end=df.index[-1].ceil("T"), freq="T"
+        start=df.index[0].floor("min"), end=df.index[-1].ceil("min"), freq="min"
     )
 
     # Reindex the dataframe to this full range, filling missing rows with NaNs
@@ -141,8 +142,12 @@ def get_stock_response(
     evaluation: Evaluation, start_date: arrow.Arrow, end_date: arrow.Arrow
 ) -> Optional[DataFrame]:
     for _ in range(2):
-        start_date = start_date.shift(days=-1)
-        end_date = min(end_date.shift(days=1), arrow.now(tz=TIMEZONE).shift(hours=-2))
+        start_date = arrow.get(
+            start_date.datetime.replace(hour=9, minute=30, second=0, tzinfo=None)
+        )
+        end_date = arrow.get(
+            end_date.datetime.replace(hour=16, minute=0, second=0, tzinfo=None)
+        )
         try:
             data = None
             time.sleep(5)
@@ -167,6 +172,7 @@ def get_stock_response(
             data = response.json()
             # Load the data into a DataFrame
             df = DataFrame(data["bars"][evaluation.symbol])
+            # df.index = df.index - pd.DateOffset(hours=4)
 
             # Convert the 't' column to datetime
             df["t"] = df["t"].map(lambda d: arrow.get(d).to(TIMEZONE).datetime)
@@ -185,7 +191,7 @@ def get_stock_response(
                 },
                 inplace=True,
             )
-            evaluation.save_to_csv(df, start_date.datetime, end_date.datetime)
+            # evaluation.save_to_csv(df, start_date.datetime, end_date.datetime)
             return df
         except Exception as e:
             logger.error(
