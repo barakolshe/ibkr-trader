@@ -144,12 +144,15 @@ class Trader:
                     #     # what="MIDPOINT",
                     #     rtbar=True,
                     # )
-                    data = get_historical_data(evaluation, 60 * 24 * 2)
-                    if data is None:
+                    data1 = get_historical_data(evaluation, 1)
+                    data2 = get_historical_data(evaluation, 3)
+                    if data1 is None or data2 is None:
                         continue
-                    dataframe = bt.feeds.PandasData(dataname=data)
+                    dataframe1 = bt.feeds.PandasData(dataname=data1)
+                    dataframe2 = bt.feeds.PandasData(dataname=data2)
                     logger.info(f"Adding data for {evaluation.symbol} {date}")
-                    cerebro.adddata(dataframe)
+                    cerebro.adddata(dataframe1)
+                    cerebro.adddata(dataframe2)
                 is_working_event: Event = Event()
                 comminfo = IBKRCommission()  # 0.5%
                 cerebro.broker.addcommissioninfo(comminfo)

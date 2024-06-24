@@ -7,7 +7,9 @@ from pandas import DataFrame
 import os
 import pandas as pd
 import requests  # type: ignore
-from datetime import datetime, tzinfo
+import requests_cache
+from datetime import datetime
+
 
 from consts.time_consts import (
     ALPACA_TIME_FORMAT,
@@ -15,6 +17,8 @@ from consts.time_consts import (
 )
 from models.evaluation import Evaluation
 from logger.logger import logger
+
+session = requests_cache.CachedSession("demo_cache")
 
 
 def cut_relevant_df(
@@ -91,7 +95,7 @@ def get_historical_data_from_file(
 
 def get_historical_data(
     evaluation: Evaluation,
-    time_limit: int,
+    time_frame: int,
 ) -> Optional[DataFrame]:
     start_date = arrow.get(evaluation.timestamp, TIMEZONE)
     end_date = arrow.get(evaluation.timestamp, TIMEZONE).shift(days=1)
@@ -109,15 +113,15 @@ def get_historical_data(
     #             end_date.datetime,
     #             time_limit,
     #         )
-    df = get_stock_response(evaluation, start_date, end_date)
+    df = get_stock_response(evaluation, start_date, end_date, time_frame)
     if df is None:
         return None
-    df = complete_missing_values(df)
+    df = complete_missing_values(df, time_frame)
 
     return df
 
 
-def complete_missing_values(df: DataFrame) -> DataFrame:
+def complete_missing_values(df: DataFrame, minute_gap: int = 1) -> DataFrame:
     # Ensure the index is datetime and sorted
     df.index = pd.to_datetime(df.index)
     df = df.sort_index()
@@ -125,7 +129,9 @@ def complete_missing_values(df: DataFrame) -> DataFrame:
     # Generate a complete datetime index for all minutes of the day
     start_time = df.index.min().replace(second=0, microsecond=0)
     end_time = df.index.max().replace(second=0, microsecond=0)
-    complete_index = pd.date_range(start=start_time, end=end_time, freq="min")
+    complete_index = pd.date_range(
+        start=start_time, end=end_time, freq=f"{minute_gap}min"
+    )
 
     # Reindex the original DataFrame to the complete index
     df_reindexed = df.reindex(complete_index)
@@ -156,7 +162,10 @@ def complete_missing_values(df: DataFrame) -> DataFrame:
 
 
 def get_stock_response(
-    evaluation: Evaluation, start_date: arrow.Arrow, end_date: arrow.Arrow
+    evaluation: Evaluation,
+    start_date: arrow.Arrow,
+    end_date: arrow.Arrow,
+    time_frame: int,
 ) -> Optional[DataFrame]:
     for _ in range(2):
         start_date = arrow.get(
@@ -168,13 +177,13 @@ def get_stock_response(
         try:
             data = None
             time.sleep(5)
-            response = requests.get(
+            response = session.get(
                 "https://data.alpaca.markets/v2/stocks/bars",
                 params={
                     "symbols": evaluation.symbol,
                     "start": start_date.format(ALPACA_TIME_FORMAT),
                     "end": end_date.format(ALPACA_TIME_FORMAT),
-                    "timeframe": "1Min",
+                    "timeframe": f"{time_frame}Min",
                 },
                 headers={
                     "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],

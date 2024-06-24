@@ -1,7 +1,9 @@
 # type: ignore
+import backtrader as bt
+
+
 class CustomRSI(bt.Indicator):
     lines = ("rsi",)
-
     params = (("rsi_period", 14),)
 
     def __init__(self):
@@ -9,15 +11,16 @@ class CustomRSI(bt.Indicator):
         self.previous_close = self.data_close(-1)
         self.delta = self.data_close - self.previous_close
 
-        self.avg_gain = bt.indicators.SmoothedMovingAverage(
-            self.delta, period=self.params.rsi_period, plot=False
+        gain = bt.If(self.delta > 0, self.delta, 0.0)
+        loss = bt.If(self.delta < 0, -self.delta, 0.0)
+
+        avg_gain = bt.indicators.SimpleMovingAverage(
+            gain, period=self.params.rsi_period
         )
-        self.avg_loss = bt.indicators.SmoothedMovingAverage(
-            bt.indicators.Abs(self.delta), period=self.params.rsi_period, plot=False
+        avg_loss = bt.indicators.SimpleMovingAverage(
+            loss, period=self.params.rsi_period
         )
 
-        self.rs = bt.indicators.IfElse(
-            self.avg_loss == 0, 100.0, self.avg_gain / self.avg_loss
-        )
+        rs = bt.DivByZero(avg_gain, avg_loss, zero=100.0)
 
-        self.lines.rsi = 100.0 - (100.0 / (1.0 + self.rs))
+        self.lines.rsi = 100.0 - (100.0 / (1.0 + rs))

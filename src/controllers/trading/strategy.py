@@ -1,6 +1,5 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from decimal import Decimal
-from mimetypes import init
 from queue import Queue
 import threading
 from typing import Any, Literal, Optional, Union
@@ -11,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 # from IBJts.source.pythonclient.ibapi import order
 from consts.time_consts import TIMEZONE
+from controllers.trading.rsi import CustomRSI  # type: ignore
 from utils.math_utils import D
 from logger.logger import logger
 
@@ -18,7 +18,8 @@ from logger.logger import logger
 class DataManager(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    data: Any
+    data1: Any
+    data2: Any
     rsi: Any
     symbol: Optional[str] = None
     score: Optional[Decimal] = D("0")
@@ -55,12 +56,13 @@ def strategy_factory(
 
         def __init__(self) -> None:
             super().__init__()
-            for index, data in enumerate(self.datas):
+            for index in range(0, len(self.datas), 2):
                 self.datas_manager.append(
                     DataManager(
-                        data=data,
-                        symbol=symbols[index],
-                        # rsi=bt.indicators.RSI(data.close, period=14),
+                        data1=self.datas[index],
+                        data2=self.datas[index + 1],
+                        symbol=symbols[index // 2],
+                        rsi=CustomRSI(self.datas[index + 1], rsi_period=14),
                     )
                 )
 
@@ -123,8 +125,6 @@ def strategy_factory(
                                 * target_data_manager.initial_order.executed.size
                             )
                         ) * -1
-                        # if target_data_manager.initial_order.isbuy():
-                        #     value *= -1
                         logger.info(
                             f"{type} completed {target_data_manager.symbol} {curr_datetime.time()} share_price: {order.executed.price:.3f}, value: {value:.3f}, commission: {order.executed.comm}"
                         )
@@ -134,6 +134,7 @@ def strategy_factory(
                 self.stop_run()
 
         def stop_run(self) -> None:
+            print(f"Stopping run {self.get_curr_datetime()}")
             self.env.runstop()
 
         def buy_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
@@ -393,13 +394,13 @@ def strategy_factory(
                     ]:
                         if data_manager.initial_order.isbuy():
                             data_manager.market_order = self.sell_custom(
-                                data=data_manager.data,
+                                data=data_manager.data1,
                                 size=data_manager.initial_order.size,
                                 exectype=bt.Order.Market,
                             )
                         else:
                             data_manager.market_order = self.buy_custom(
-                                data=data_manager.data,
+                                data=data_manager.data1,
                                 size=data_manager.initial_order.size,
                                 exectype=bt.Order.Market,
                             )
@@ -424,31 +425,30 @@ def strategy_factory(
                             not in [bt.Order.Completed]
                         ):
                             if (
-                                data_manager.rsi[0] > 65
+                                data_manager.rsi[0] >= 70
                                 and data_manager.initial_order.isbuy()
                                 and data_manager.initial_order.executed.price
-                                < data_manager.data.close[0]
+                                < data_manager.data1.close[0]
                             ):
                                 logger.info("Leaving because of RSI")
                                 data_manager.limit_price_order.cancel()
-                                data_manager.limit_price_order.cancel()
                                 data_manager.stop_price_order.cancel()
                                 data_manager.market_order = self.sell_custom(
-                                    data=data_manager.data,
+                                    data=data_manager.data1,
                                     size=data_manager.initial_order.size,
                                     exectype=bt.Order.Market,
                                 )
                             elif (
-                                data_manager.rsi[0] < 35
-                                and not data_manager.initial_order.issell()
+                                data_manager.rsi[0] <= 30
+                                and data_manager.initial_order.issell()
                                 and data_manager.initial_order.executed.price
-                                > data_manager.data.close[0]
+                                > data_manager.data1.close[0]
                             ):
                                 logger.info("Leaving because of RSI")
                                 data_manager.limit_price_order.cancel()
                                 data_manager.stop_price_order.cancel()
                                 data_manager.market_order = self.buy_custom(
-                                    data=data_manager.data,
+                                    data=data_manager.data1,
                                     size=data_manager.initial_order.size,
                                     exectype=bt.Order.Market,
                                 )
@@ -463,7 +463,7 @@ def strategy_factory(
                 return
             # Iterating datas and checking stats
             for data_manager in self.datas_manager:
-                data = data_manager.data
+                data = data_manager.data1
                 data_manager.average_volume = self.get_average_volume(data)
                 if (
                     data_manager.average_volume is None
@@ -499,7 +499,7 @@ def strategy_factory(
                 filtered_scores, key=lambda x: x.score, reverse=True  # type: ignore
             )[0:3]
             for data_manager in sorted_scores:
-                data = data_manager.data
+                data = data_manager.data1
                 if data_manager.average_volume is None:
                     raise Exception("Average volume is None")
                 size = self.get_size(
@@ -538,7 +538,7 @@ def strategy_factory(
                         order_type="short",
                     )
             curr_rsi = data_manager.rsi[0]
-            data_manager.should_use_rsi = curr_rsi > 35 and curr_rsi < 65
+            data_manager.should_use_rsi = curr_rsi >= 40 and curr_rsi <= 60
             self.is_in_position = True
 
         def get_size(self, price: Decimal, average_volume: int, divider: int) -> int:
