@@ -132,7 +132,7 @@ def strategy_factory(
         def sell_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
             raise NotImplementedError()
 
-        def get_index_by_datetime(self, datetime: datetime) -> int:
+        def get_index_by_datetime(self, datetime: arrow.Arrow) -> int:
             curr_datetime = self.get_curr_datetime()
             return 0 - int((curr_datetime - datetime).seconds / self.tick_duration)
 
@@ -216,9 +216,7 @@ def strategy_factory(
                 data.close[0]
                 / data.open[
                     self.get_index_by_datetime(
-                        arrow.get(curr_datetime)
-                        .replace(hour=9, minute=34, second=0)
-                        .datetime,
+                        arrow.get(curr_datetime).replace(hour=9, minute=34, second=0),
                     )
                 ]
             ) - 1
@@ -231,9 +229,9 @@ def strategy_factory(
                     data.volume.get(
                         size=abs(
                             self.get_index_by_datetime(
-                                arrow.get(curr_datetime)
-                                .replace(hour=9, minute=35, second=0)
-                                .datetime,
+                                arrow.get(curr_datetime).replace(
+                                    hour=9, minute=35, second=0
+                                ),
                             )
                         )
                     )
@@ -242,9 +240,9 @@ def strategy_factory(
                     data.open.get(
                         size=abs(
                             self.get_index_by_datetime(
-                                arrow.get(curr_datetime)
-                                .replace(hour=9, minute=35, second=0)
-                                .datetime,
+                                arrow.get(curr_datetime).replace(
+                                    hour=9, minute=35, second=0
+                                ),
                             )
                         )
                     )
@@ -258,18 +256,16 @@ def strategy_factory(
                     data.high.get(
                         size=abs(
                             self.get_index_by_datetime(
-                                arrow.get(curr_datetime)
-                                .replace(hour=9, minute=35, second=0)
-                                .datetime,
+                                arrow.get(curr_datetime).replace(
+                                    hour=9, minute=35, second=0
+                                ),
                             )
                         )
                     )
                 )
                 start_of_day = data.open[
                     self.get_index_by_datetime(
-                        arrow.get(curr_datetime)
-                        .replace(hour=9, minute=30, second=0)
-                        .datetime,
+                        arrow.get(curr_datetime).replace(hour=9, minute=30, second=0),
                     )
                 ]
                 curr_diff, start_diff = (
@@ -281,18 +277,16 @@ def strategy_factory(
                     data.low.get(
                         size=abs(
                             self.get_index_by_datetime(
-                                arrow.get(curr_datetime)
-                                .replace(hour=9, minute=35, second=0)
-                                .datetime,
+                                arrow.get(curr_datetime).replace(
+                                    hour=9, minute=35, second=0
+                                ),
                             )
                         )
                     )
                 )
                 start_of_day = data.open[
                     self.get_index_by_datetime(
-                        arrow.get(curr_datetime)
-                        .replace(hour=9, minute=30, second=0)
-                        .datetime,
+                        arrow.get(curr_datetime).replace(hour=9, minute=30, second=0),
                     )
                 ]
                 curr_diff, start_diff = (
@@ -300,8 +294,8 @@ def strategy_factory(
                     start_of_day - lowest,
                 )
 
-            return not bool(curr_diff * start_diff > 0 and curr_diff > 0.5 * start_diff)
-            # return False
+            if bool(curr_diff * start_diff > 0 and curr_diff > 0.5 * start_diff):
+                return False
 
             if is_buy:
                 highest_datetime: datetime = datetime.now()
@@ -309,11 +303,9 @@ def strategy_factory(
                 lowest_open = -1
                 for index in range(
                     self.get_index_by_datetime(
-                        arrow.get(curr_datetime)
-                        .replace(hour=10, minute=0, second=0)
-                        .datetime
+                        arrow.get(curr_datetime).replace(hour=10, minute=0, second=0)
                     ),
-                    self.get_index_by_timedelta(timedelta(minutes=-5)),
+                    self.get_index_by_timedelta(timedelta(minutes=5)),
                 ):
                     if data.high[index] > highest_open:
                         highest_open = data.high[index]
@@ -321,40 +313,66 @@ def strategy_factory(
 
                 lowest_open = min(
                     data.open.get(
-                        size=abs(self.get_index_by_datetime(highest_datetime))
+                        size=abs(
+                            self.get_index_by_datetime(
+                                arrow.get(highest_datetime).to(TIMEZONE)
+                            )
+                        )
                     )
                 )
                 if highest_open > data.close[0] and (
                     highest_open - data.close[0]
                 ) * 0.5 > (data.close[0] - lowest_open):
                     return False
-                else:
-                    return True
+
+                if (
+                    data.close[self.get_index_by_timedelta(timedelta(minutes=39))]
+                    - data.close[0]
+                    > 0
+                    and data.close[self.get_index_by_timedelta(timedelta(minutes=14))]
+                    - data.close[0]
+                    > 0
+                ):
+                    return False
             else:
                 lowest_datetime: datetime = datetime.now()
                 lowest_open = -1
                 highest_open = -1
                 for index in range(
                     self.get_index_by_datetime(
-                        arrow.get(curr_datetime)
-                        .replace(hour=10, minute=0, second=0)
-                        .datetime
+                        arrow.get(curr_datetime).replace(hour=10, minute=0, second=0)
                     ),
-                    self.get_index_by_timedelta(timedelta(minutes=-5)),
+                    self.get_index_by_timedelta(timedelta(minutes=5)),
                 ):
                     if data.low[index] < lowest_open:
                         lowest_open = data.low[index]
                         lowest_datetime = data.datetime.datetime(index)
 
                 highest_open = max(
-                    data.open.get(size=abs(self.get_index_by_datetime(lowest_datetime)))
+                    data.open.get(
+                        size=abs(
+                            self.get_index_by_datetime(
+                                arrow.get(lowest_datetime).to(TIMEZONE)
+                            )
+                        )
+                    )
                 )
                 if lowest_open < data.close[0] and (
                     data.close[0] - lowest_open
                 ) * 0.5 > (highest_open - data.close[0]):
                     return False
-                else:
-                    return True
+
+                if (
+                    data.close[0]
+                    - data.close[self.get_index_by_timedelta(timedelta(minutes=39))]
+                    > 0
+                    and data.close[0]
+                    - data.close[self.get_index_by_timedelta(timedelta(minutes=14))]
+                    > 0
+                ):
+                    return False
+
+            return True
 
         def get_curr_datetime(self) -> arrow.Arrow:
             return arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE)
