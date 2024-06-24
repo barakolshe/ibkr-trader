@@ -132,17 +132,12 @@ def strategy_factory(
         def sell_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
             raise NotImplementedError()
 
-        def adjust_time_index(self, index: int) -> int:
-            value = index * (60 / self.tick_duration)
-            if value % 1.0 != 0:
-                raise Exception("Value is not an integer")
-            return int(value)
-
         def get_index_by_datetime(self, datetime: datetime) -> int:
-            pass
+            curr_datetime = self.get_curr_datetime()
+            return 0 - int((curr_datetime - datetime).seconds / self.tick_duration)
 
         def get_index_by_timedelta(self, timedelta: timedelta) -> int:
-            pass
+            return 0 - int(timedelta.seconds / self.tick_duration)
 
         def bracket_order_custom(
             self,
@@ -216,10 +211,158 @@ def strategy_factory(
 
             return main, limit_price, stop_price
 
+        def get_close_gap(self, data: Any, curr_datetime: arrow.Arrow) -> Decimal:
+            close_gap = (
+                data.close[0]
+                / data.open[
+                    self.get_index_by_datetime(
+                        arrow.get(curr_datetime)
+                        .replace(hour=9, minute=34, second=0)
+                        .datetime,
+                    )
+                ]
+            ) - 1
+            return D(close_gap)
+
+        def get_average_volume(self, data: Any) -> int:
+            curr_datetime = self.get_curr_datetime()
+            return int(
+                average(
+                    data.volume.get(
+                        size=abs(
+                            self.get_index_by_datetime(
+                                arrow.get(curr_datetime)
+                                .replace(hour=9, minute=35, second=0)
+                                .datetime,
+                            )
+                        )
+                    )
+                )
+                * average(
+                    data.open.get(
+                        size=abs(
+                            self.get_index_by_datetime(
+                                arrow.get(curr_datetime)
+                                .replace(hour=9, minute=35, second=0)
+                                .datetime,
+                            )
+                        )
+                    )
+                )
+            )
+
+        def should_trade_stock(self, data: Any, is_buy: bool) -> bool:
+            curr_datetime = self.get_curr_datetime()
+            if is_buy:
+                highest = max(
+                    data.high.get(
+                        size=abs(
+                            self.get_index_by_datetime(
+                                arrow.get(curr_datetime)
+                                .replace(hour=9, minute=35, second=0)
+                                .datetime,
+                            )
+                        )
+                    )
+                )
+                start_of_day = data.open[
+                    self.get_index_by_datetime(
+                        arrow.get(curr_datetime)
+                        .replace(hour=9, minute=30, second=0)
+                        .datetime,
+                    )
+                ]
+                curr_diff, start_diff = (
+                    highest - data.close[0],
+                    highest - start_of_day,
+                )
+            else:
+                lowest = min(
+                    data.low.get(
+                        size=abs(
+                            self.get_index_by_datetime(
+                                arrow.get(curr_datetime)
+                                .replace(hour=9, minute=35, second=0)
+                                .datetime,
+                            )
+                        )
+                    )
+                )
+                start_of_day = data.open[
+                    self.get_index_by_datetime(
+                        arrow.get(curr_datetime)
+                        .replace(hour=9, minute=30, second=0)
+                        .datetime,
+                    )
+                ]
+                curr_diff, start_diff = (
+                    data.close[0] - lowest,
+                    start_of_day - lowest,
+                )
+
+            return not bool(curr_diff * start_diff > 0 and curr_diff > 0.5 * start_diff)
+            # return False
+
+            if is_buy:
+                highest_datetime: datetime = datetime.now()
+                highest_open = -1
+                lowest_open = -1
+                for index in range(
+                    self.get_index_by_datetime(
+                        arrow.get(curr_datetime)
+                        .replace(hour=10, minute=0, second=0)
+                        .datetime
+                    ),
+                    self.get_index_by_timedelta(timedelta(minutes=-5)),
+                ):
+                    if data.high[index] > highest_open:
+                        highest_open = data.high[index]
+                        highest_datetime = data.datetime.datetime(index)
+
+                lowest_open = min(
+                    data.open.get(
+                        size=abs(self.get_index_by_datetime(highest_datetime))
+                    )
+                )
+                if highest_open > data.close[0] and (
+                    highest_open - data.close[0]
+                ) * 0.5 > (data.close[0] - lowest_open):
+                    return False
+                else:
+                    return True
+            else:
+                lowest_datetime: datetime = datetime.now()
+                lowest_open = -1
+                highest_open = -1
+                for index in range(
+                    self.get_index_by_datetime(
+                        arrow.get(curr_datetime)
+                        .replace(hour=10, minute=0, second=0)
+                        .datetime
+                    ),
+                    self.get_index_by_timedelta(timedelta(minutes=-5)),
+                ):
+                    if data.low[index] < lowest_open:
+                        lowest_open = data.low[index]
+                        lowest_datetime = data.datetime.datetime(index)
+
+                highest_open = max(
+                    data.open.get(size=abs(self.get_index_by_datetime(lowest_datetime)))
+                )
+                if lowest_open < data.close[0] and (
+                    data.close[0] - lowest_open
+                ) * 0.5 > (highest_open - data.close[0]):
+                    return False
+                else:
+                    return True
+
+        def get_curr_datetime(self) -> arrow.Arrow:
+            return arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE)
+
         def next(self) -> None:
             if not self.working_signal.is_set():
                 self.working_signal.set()
-            curr_datetime = arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE)
+            curr_datetime = self.get_curr_datetime()
             if self.did_leave_position:
                 return
 
@@ -266,9 +409,7 @@ def strategy_factory(
             # Iterating datas and checking stats
             for data_manager in self.datas_manager:
                 data = data_manager.data
-                data_manager.average_volume = average(
-                    data.volume.get(size=self.adjust_time_index(84))
-                ) * average(data.open.get(size=self.adjust_time_index(84)))
+                data_manager.average_volume = self.get_average_volume(data)
                 if (
                     data_manager.average_volume is None
                     or data_manager.average_volume < 10000
@@ -276,45 +417,20 @@ def strategy_factory(
                     logger.info(f"Not trading {data_manager.symbol}")
                     data_manager.score = D("0")
                     continue
-                close_gap = (
-                    data.close[0] / data.open[(self.adjust_time_index(-85))]  # 9:34
-                ) - 1
+                close_gap = self.get_close_gap(data, curr_datetime)
                 if close_gap > 0:
-                    highest = max(data.high.get(size=self.adjust_time_index(84)))
-                    start_of_day = data.open[self.adjust_time_index(-89)]
-                    curr_diff, start_diff = (
-                        highest - data.close[0],
-                        highest - start_of_day,
-                    )
-                    if (
-                        data.close[self.adjust_time_index(-39)] - data.close[0] > 0
-                        and data.close[self.adjust_time_index(-14)] - data.close[0] > 0
-                    ):
-                        data_manager.score = D("0")
-                        logger.info(f"Not trading {data_manager.symbol}")
-                        continue
-                    if curr_diff * start_diff > 0 and curr_diff > 0.5 * start_diff:
+                    should_trade_stock = self.should_trade_stock(data, is_buy=True)
+                    if not should_trade_stock:
                         data_manager.score = D("0")
                         logger.info(f"Not trading {data_manager.symbol}")
                     else:
                         data_manager.score = D(abs(close_gap))
                 else:
-                    lowest = min(data.low.get(size=self.adjust_time_index(84)))
-                    start_of_day = data.open[self.adjust_time_index(-89)]
-                    curr_diff, start_diff = (
-                        data.close[0] - lowest,
-                        start_of_day - lowest,
-                    )
-                    if (
-                        data.close[0] - data.close[self.adjust_time_index(-39)] > 0
-                        and data.close[0] - data.close[self.adjust_time_index(-14)] > 0
-                    ):
+                    should_trade_stock = self.should_trade_stock(data, is_buy=False)
+                    if not should_trade_stock:
                         data_manager.score = D("0")
                         logger.info(f"Not trading {data_manager.symbol}")
                         continue
-                    if curr_diff * start_diff > 0 and curr_diff > 0.5 * start_diff:
-                        data_manager.score = D("0")
-                        logger.info(f"Not trading {data_manager.symbol}")
                     else:
                         data_manager.score = D(abs(close_gap))
                 data_manager.close_gap = D(close_gap)
