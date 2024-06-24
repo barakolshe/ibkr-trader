@@ -11,7 +11,6 @@ from pydantic import ConfigDict, BaseModel
 from atreyu_backtrader_api import IBData
 
 from atreyu_backtrader_api import IBStore, IBData
-from consts.time_consts import TIMEZONE
 from controllers.trading.commision import IBKRCommission  # type: ignore
 from controllers.trading.fetchers.wrapper import get_historical_data
 from controllers.trading.mock_broker import MockBroker

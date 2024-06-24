@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from mimetypes import init
 from queue import Queue
 import threading
 from typing import Any, Literal, Optional, Union
@@ -8,6 +9,7 @@ import backtrader as bt
 from numpy import average
 from pydantic import BaseModel, ConfigDict
 
+# from IBJts.source.pythonclient.ibapi import order
 from consts.time_consts import TIMEZONE
 from utils.math_utils import D
 from logger.logger import logger
@@ -17,10 +19,12 @@ class DataManager(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     data: Any
+    rsi: Any
     symbol: Optional[str] = None
     score: Optional[Decimal] = D("0")
     close_gap: Optional[Decimal] = D("0")
     average_volume: Optional[int] = None
+    should_use_rsi: bool = False
 
     initial_order: Optional[bt.Order] = None
     limit_price_order: Optional[bt.Order] = None
@@ -52,7 +56,13 @@ def strategy_factory(
         def __init__(self) -> None:
             super().__init__()
             for index, data in enumerate(self.datas):
-                self.datas_manager.append(DataManager(data=data, symbol=symbols[index]))
+                self.datas_manager.append(
+                    DataManager(
+                        data=data,
+                        symbol=symbols[index],
+                        # rsi=bt.indicators.RSI(data.close, period=14),
+                    )
+                )
 
         def get_cash(self) -> float:
             return self.broker.getcash()  # type: ignore
@@ -297,29 +307,30 @@ def strategy_factory(
             if bool(curr_diff * start_diff > 0 and curr_diff > 0.5 * start_diff):
                 return False
 
-            if is_buy:
-                highest_datetime: datetime = datetime.now()
-                highest_open = -1
-                lowest_open = -1
-                for index in range(
-                    self.get_index_by_datetime(
-                        arrow.get(curr_datetime).replace(hour=10, minute=0, second=0)
-                    ),
-                    self.get_index_by_timedelta(timedelta(minutes=5)),
-                ):
-                    if data.high[index] > highest_open:
-                        highest_open = data.high[index]
-                        highest_datetime = data.datetime.datetime(index)
-
-                lowest_open = min(
-                    data.open.get(
-                        size=abs(
-                            self.get_index_by_datetime(
-                                arrow.get(highest_datetime).to(TIMEZONE)
+            highest_open = max(
+                data.open.get(
+                    size=abs(
+                        self.get_index_by_datetime(
+                            arrow.get(curr_datetime).replace(
+                                hour=10, minute=0, second=0
                             )
                         )
                     )
                 )
+            )
+
+            lowest_open = min(
+                data.open.get(
+                    size=abs(
+                        self.get_index_by_datetime(
+                            arrow.get(curr_datetime).replace(
+                                hour=10, minute=0, second=0
+                            )
+                        )
+                    )
+                )
+            )
+            if is_buy:
                 if highest_open > data.close[0] and (
                     highest_open - data.close[0]
                 ) * 0.5 > (data.close[0] - lowest_open):
@@ -335,28 +346,6 @@ def strategy_factory(
                 ):
                     return False
             else:
-                lowest_datetime: datetime = datetime.now()
-                lowest_open = -1
-                highest_open = -1
-                for index in range(
-                    self.get_index_by_datetime(
-                        arrow.get(curr_datetime).replace(hour=10, minute=0, second=0)
-                    ),
-                    self.get_index_by_timedelta(timedelta(minutes=5)),
-                ):
-                    if data.low[index] < lowest_open:
-                        lowest_open = data.low[index]
-                        lowest_datetime = data.datetime.datetime(index)
-
-                highest_open = max(
-                    data.open.get(
-                        size=abs(
-                            self.get_index_by_datetime(
-                                arrow.get(lowest_datetime).to(TIMEZONE)
-                            )
-                        )
-                    )
-                )
                 if lowest_open < data.close[0] and (
                     data.close[0] - lowest_open
                 ) * 0.5 > (highest_open - data.close[0]):
@@ -390,7 +379,8 @@ def strategy_factory(
             ):
                 for data_manager in self.datas_manager:
                     if (
-                        data_manager.initial_order is None
+                        data_manager.market_order is not None
+                        or data_manager.initial_order is None
                         or data_manager.initial_order.status not in [bt.Order.Completed]
                         or data_manager.limit_price_order.status in [bt.Order.Completed]  # type: ignore
                         or data_manager.stop_price_order.status in [bt.Order.Completed]  # type: ignore
@@ -414,7 +404,54 @@ def strategy_factory(
                                 exectype=bt.Order.Market,
                             )
                 self.did_leave_position = True
+                return
 
+            # Checking if RSI is signaling to leave
+            if self.is_in_position:
+                for data_manager in self.datas_manager:
+                    if (
+                        data_manager.initial_order is not None
+                        and data_manager.initial_order.status in [bt.Order.Completed]
+                        and data_manager.should_use_rsi
+                    ):
+                        if (
+                            data_manager.market_order is None
+                            and data_manager.limit_price_order is not None
+                            and data_manager.limit_price_order.status
+                            not in [bt.Order.Completed]
+                            and data_manager.stop_price_order is not None
+                            and data_manager.stop_price_order.status
+                            not in [bt.Order.Completed]
+                        ):
+                            if (
+                                data_manager.rsi[0] > 65
+                                and data_manager.initial_order.isbuy()
+                                and data_manager.initial_order.executed.price
+                                < data_manager.data.close[0]
+                            ):
+                                logger.info("Leaving because of RSI")
+                                data_manager.limit_price_order.cancel()
+                                data_manager.limit_price_order.cancel()
+                                data_manager.stop_price_order.cancel()
+                                data_manager.market_order = self.sell_custom(
+                                    data=data_manager.data,
+                                    size=data_manager.initial_order.size,
+                                    exectype=bt.Order.Market,
+                                )
+                            elif (
+                                data_manager.rsi[0] < 35
+                                and not data_manager.initial_order.issell()
+                                and data_manager.initial_order.executed.price
+                                > data_manager.data.close[0]
+                            ):
+                                logger.info("Leaving because of RSI")
+                                data_manager.limit_price_order.cancel()
+                                data_manager.stop_price_order.cancel()
+                                data_manager.market_order = self.buy_custom(
+                                    data=data_manager.data,
+                                    size=data_manager.initial_order.size,
+                                    exectype=bt.Order.Market,
+                                )
             if (
                 not (
                     arrow.get(self.today).replace(hour=10, minute=59, second=0)
@@ -500,6 +537,8 @@ def strategy_factory(
                         children_valid=timedelta(hours=4),
                         order_type="short",
                     )
+            curr_rsi = data_manager.rsi[0]
+            data_manager.should_use_rsi = curr_rsi > 35 and curr_rsi < 65
             self.is_in_position = True
 
         def get_size(self, price: Decimal, average_volume: int, divider: int) -> int:
