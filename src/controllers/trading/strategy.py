@@ -408,50 +408,52 @@ def strategy_factory(
                 return
 
             # Checking if RSI is signaling to leave
-            if self.is_in_position:
-                for data_manager in self.datas_manager:
-                    if (
-                        data_manager.initial_order is not None
-                        and data_manager.initial_order.status in [bt.Order.Completed]
-                        and data_manager.should_use_rsi
-                    ):
-                        if (
-                            data_manager.market_order is None
-                            and data_manager.limit_price_order is not None
-                            and data_manager.limit_price_order.status
-                            not in [bt.Order.Completed]
-                            and data_manager.stop_price_order is not None
-                            and data_manager.stop_price_order.status
-                            not in [bt.Order.Completed]
-                        ):
-                            if (
-                                data_manager.rsi[0] >= 70
-                                and data_manager.initial_order.isbuy()
-                                and data_manager.initial_order.executed.price
-                                < data_manager.data1.close[0]
-                            ):
-                                logger.info("Leaving because of RSI")
-                                data_manager.limit_price_order.cancel()
-                                data_manager.stop_price_order.cancel()
-                                data_manager.market_order = self.sell_custom(
-                                    data=data_manager.data1,
-                                    size=data_manager.initial_order.size,
-                                    exectype=bt.Order.Market,
-                                )
-                            elif (
-                                data_manager.rsi[0] <= 30
-                                and data_manager.initial_order.issell()
-                                and data_manager.initial_order.executed.price
-                                > data_manager.data1.close[0]
-                            ):
-                                logger.info("Leaving because of RSI")
-                                data_manager.limit_price_order.cancel()
-                                data_manager.stop_price_order.cancel()
-                                data_manager.market_order = self.buy_custom(
-                                    data=data_manager.data1,
-                                    size=data_manager.initial_order.size,
-                                    exectype=bt.Order.Market,
-                                )
+            # if self.is_in_position:
+            #     for data_manager in self.datas_manager:
+            #         if (
+            #             data_manager.initial_order is not None
+            #             and data_manager.initial_order.status in [bt.Order.Completed]
+            #             and data_manager.should_use_rsi
+            #         ):
+            #             if (
+            #                 data_manager.market_order is None
+            #                 and data_manager.limit_price_order is not None
+            #                 and data_manager.limit_price_order.status
+            #                 not in [bt.Order.Completed]
+            #                 and data_manager.stop_price_order is not None
+            #                 and data_manager.stop_price_order.status
+            #                 not in [bt.Order.Completed]
+            #             ):
+            #                 if (
+            #                     data_manager.rsi[0] >= 72
+            #                     and data_manager.initial_order.isbuy()
+            #                     and data_manager.initial_order.executed.price
+            #                     < data_manager.data1.close[0]
+            #                 ):
+            #                     logger.info("Leaving because of RSI")
+            #                     data_manager.limit_price_order.cancel()
+            #                     data_manager.stop_price_order.cancel()
+            #                     logger.info(f"RSI: {data_manager.rsi[0]}")
+            #                     data_manager.market_order = self.sell_custom(
+            #                         data=data_manager.data1,
+            #                         size=data_manager.initial_order.size,
+            #                         exectype=bt.Order.Market,
+            #                     )
+            #                 elif (
+            #                     data_manager.rsi[0] <= 28
+            #                     and data_manager.initial_order.issell()
+            #                     and data_manager.initial_order.executed.price
+            #                     > data_manager.data1.close[0]
+            #                 ):
+            #                     logger.info("Leaving because of RSI")
+            #                     data_manager.limit_price_order.cancel()
+            #                     data_manager.stop_price_order.cancel()
+            #                     logger.info(f"RSI: {data_manager.rsi[0]}")
+            #                     data_manager.market_order = self.buy_custom(
+            #                         data=data_manager.data1,
+            #                         size=data_manager.initial_order.size,
+            #                         exectype=bt.Order.Market,
+            #                     )
             if (
                 not (
                     arrow.get(self.today).replace(hour=10, minute=59, second=0)
@@ -538,6 +540,7 @@ def strategy_factory(
                         order_type="short",
                     )
             curr_rsi = data_manager.rsi[0]
+            logger.info(f"INITIAL RSI: {curr_rsi}")
             data_manager.should_use_rsi = curr_rsi >= 40 and curr_rsi <= 60
             self.is_in_position = True
 
