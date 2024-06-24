@@ -122,20 +122,37 @@ def complete_missing_values(df: DataFrame) -> DataFrame:
     df.index = pd.to_datetime(df.index)
     df = df.sort_index()
 
-    # Create a date range from the first to the last timestamp at minute frequency
-    full_range = pd.date_range(
-        start=df.index[0].floor("min"), end=df.index[-1].ceil("min"), freq="min"
-    )
+    # Generate a complete datetime index for all minutes of the day
+    start_time = df.index.min().replace(second=0, microsecond=0)
+    end_time = df.index.max().replace(second=0, microsecond=0)
+    complete_index = pd.date_range(start=start_time, end=end_time, freq="min")
 
-    # Reindex the dataframe to this full range, filling missing rows with NaNs
-    df_full = df.reindex(full_range)
+    # Reindex the original DataFrame to the complete index
+    df_reindexed = df.reindex(complete_index)
 
-    # Optionally forward-fill or backward-fill the missing values
-    df_full.ffill(
-        inplace=True
-    )  # You can also use .bfill() or .fillna(method='ffill') based on the requirement
+    # Forward fill the 'close' column to get the previous row's close price
+    # Please fix this
+    df_reindexed["close"] = df_reindexed["close"].ffill()
 
-    return df_full
+    # Set 'open', 'high', 'low', and 'close' to the forward filled 'close' value
+    df_reindexed["open"] = df_reindexed["close"]
+    df_reindexed["high"] = df_reindexed["close"]
+    df_reindexed["low"] = df_reindexed["close"]
+
+    # Fill missing 'volume' with 0
+    df_reindexed["volume"] = df_reindexed["volume"].fillna(0)
+
+    # Define trading hours
+    market_open = pd.Timestamp("09:30:00", tz="US/Eastern").time()
+    market_close = pd.Timestamp("16:00:00", tz="US/Eastern").time()
+
+    # Assuming the DataFrame index is localized to 'US/Eastern' time zone for filtering
+    # df_reindexed.index = df_reindexed.index.tz_localize("UTC").tz_convert("US/Eastern")
+
+    # Filter DataFrame to include only rows within trading hours
+    df_trading_hours = df_reindexed.between_time(market_open, market_close)
+
+    return df_trading_hours
 
 
 def get_stock_response(

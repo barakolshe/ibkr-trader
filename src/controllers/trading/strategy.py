@@ -20,6 +20,7 @@ class DataManager(BaseModel):
     symbol: Optional[str] = None
     score: Optional[Decimal] = D("0")
     close_gap: Optional[Decimal] = D("0")
+    average_volume: Optional[int] = None
 
     initial_order: Optional[bt.Order] = None
     limit_price_order: Optional[bt.Order] = None
@@ -65,7 +66,7 @@ def strategy_factory(
 
         def notify_order(self, order: bt.Order) -> None:
             curr_datetime = arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE)
-            symbol = ""
+            target_data_manager: Optional[DataManager] = None
             for data_manager in self.datas_manager:
                 if order in [
                     data_manager.initial_order,
@@ -73,37 +74,56 @@ def strategy_factory(
                     data_manager.stop_price_order,
                     data_manager.market_order,
                 ]:
-                    if data_manager.symbol is None:
-                        raise Exception("Symbol is None")
-                    symbol = data_manager.symbol
+                    target_data_manager = data_manager
             type = ""
             if order.isbuy():
                 type = "Buy"
             else:
                 type = "Sell"
 
+            if target_data_manager is None:
+                return
+
             if order.status in [order.Accepted]:
                 return
 
             if order.status in [order.Canceled]:
-                logger.info(f"{type} cancelled {symbol} {curr_datetime} {order.size}")
+                logger.info(
+                    f"{type} cancelled {target_data_manager.symbol} {curr_datetime.time()}"
+                )
                 return
 
             if order.status in [order.Expired]:
-                logger.info(f"{type} expired {symbol} {curr_datetime} {order.size}")
+                logger.info(
+                    f"{type} expired {target_data_manager.symbol} {curr_datetime.time()}"
+                )
                 return
 
             if order.status in [order.Completed]:
-                logger.info(
-                    f"{type} completed {symbol} {curr_datetime} order_value: {order.executed.price}"
-                )
+                if order == target_data_manager.initial_order:
+                    logger.info(
+                        f"{type} completed {target_data_manager.symbol} {curr_datetime.time()} share_price: {order.executed.price}, commission: {order.executed.comm}"
+                    )
+                else:
+                    if target_data_manager.initial_order is not None:
+                        value = (
+                            (order.executed.price * order.executed.size)
+                            + (
+                                target_data_manager.initial_order.executed.price
+                                * target_data_manager.initial_order.executed.size
+                            )
+                        ) * -1
+                        # if target_data_manager.initial_order.isbuy():
+                        #     value *= -1
+                        logger.info(
+                            f"{type} completed {target_data_manager.symbol} {curr_datetime.time()} share_price: {order.executed.price:.3f}, value: {value:.3f}, commission: {order.executed.comm}"
+                        )
                 self.bar_executed = len(self)
 
             if self.did_leave_position and self.position.size == 0:
                 self.stop_run()
 
         def stop_run(self) -> None:
-            print("Stopping run")
             self.env.runstop()
 
         def buy_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
@@ -112,11 +132,13 @@ def strategy_factory(
         def sell_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
             raise NotImplementedError()
 
-        def adjust_time_index(self, index: int) -> int:
-            value = index * (60 / self.tick_duration)
-            if value % 1.0 != 0:
-                raise Exception("Value is not an integer")
-            return int(value)
+        def get_index_by_datetime(
+            self, datetime: datetime, curr_datetime: datetime
+        ) -> int:
+            return int((curr_datetime - datetime).seconds / self.tick_duration)
+
+        def get_index_by_timedelta(self, timedelta: timedelta) -> int:
+            return int(timedelta.seconds / self.tick_duration)
 
         def bracket_order_custom(
             self,
@@ -240,19 +262,48 @@ def strategy_factory(
             # Iterating datas and checking stats
             for data_manager in self.datas_manager:
                 data = data_manager.data
-                volume = sum(
+                data_manager.average_volume = average(
                     data.volume.get(size=self.adjust_time_index(84))
                 ) * average(data.open.get(size=self.adjust_time_index(84)))
-                if volume < 20000:
+                if (
+                    data_manager.average_volume is None
+                    or data_manager.average_volume < 10000
+                ):
                     logger.info(f"Not trading {data_manager.symbol}")
                     data_manager.score = D("0")
                     continue
                 close_gap = (
-                    data.close[0] / data.open[(self.adjust_time_index(-84))]
+                    data.close[0]
+                    / data.open[
+                        (
+                            self.get_index_by_datetime(
+                                arrow.get(curr_datetime)
+                                .replace(hour=9, minute=34, second=0)
+                                .datetime,
+                                curr_datetime.datetime,
+                            ),
+                        )
+                    ]  # -85
                 ) - 1
                 if close_gap > 0:
-                    highest = max(data.high.get(size=self.adjust_time_index(84)))
-                    start_of_day = data.open[self.adjust_time_index(-89)]
+                    highest = max(
+                        data.high.get(
+                            size=self.get_index_by_datetime(
+                                arrow.get(curr_datetime)
+                                .replace(hour=9, minute=35, second=0)
+                                .datetime,
+                                curr_datetime.datetime,
+                            ),
+                        )
+                    )
+                    start_of_day = data.open[
+                        self.get_index_by_datetime(
+                            arrow.get(curr_datetime)
+                            .replace(hour=9, minute=30, second=0)
+                            .datetime,
+                            curr_datetime.datetime,
+                        ),
+                    ]
                     curr_diff, start_diff = (
                         highest - data.close[0],
                         highest - start_of_day,
@@ -300,7 +351,11 @@ def strategy_factory(
             )[0:3]
             for data_manager in sorted_scores:
                 data = data_manager.data
-                size = self.get_size(data.close[0]) // len(sorted_scores)
+                if data_manager.average_volume is None:
+                    raise Exception("Average volume is None")
+                size = self.get_size(
+                    data.close[0], data_manager.average_volume, len(sorted_scores)
+                )
                 if data_manager.close_gap is not None and data_manager.close_gap > D(
                     "0"
                 ):
@@ -335,7 +390,7 @@ def strategy_factory(
                     )
             self.is_in_position = True
 
-        def get_size(self, price: Decimal) -> int:
+        def get_size(self, price: Decimal, average_volume: int, divider: int) -> int:
             raise NotImplementedError()
 
     if type == "TEST":
@@ -366,8 +421,15 @@ def strategy_factory(
                     raise Exception("Using test wrong")
                 _mock_broker_queue.put(("SET", cash))
 
-            def get_size(self, price: Decimal) -> int:
-                return int(D(self.get_cash() * 0.99) // D(price))
+            def get_size(
+                self, price: Decimal, average_volume: int, divider: int
+            ) -> int:
+                size = min(
+                    average_volume // 2,
+                    int(D(self.get_cash() * 0.99) // D(price) // divider),
+                )
+                logger.info(f"Size: {size}")
+                return size
 
         return TestStrategy
 
@@ -401,8 +463,13 @@ def strategy_factory(
             def should_start_trading(self, curr_datetime: datetime) -> bool:
                 return self.data_ready
 
-            def get_size(self, price: Decimal) -> int:
-                return int(D(min(self.get_cash(), 5000)) // price)
+            def get_size(
+                self, price: Decimal, average_volume: int, divider: int
+            ) -> int:
+                return min(
+                    average_volume // 2,
+                    int(D(min(self.get_cash(), 5000)) // price // divider),
+                )
 
             def get_price(self, price: float) -> float:
                 return float(D(price, precision=D("0.05")))

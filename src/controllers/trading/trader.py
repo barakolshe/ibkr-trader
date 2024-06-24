@@ -12,7 +12,7 @@ from atreyu_backtrader_api import IBData
 
 from atreyu_backtrader_api import IBStore, IBData
 from consts.time_consts import TIMEZONE
-from controllers.trading.commision import IBKRComission
+from controllers.trading.commision import IBKRCommission  # type: ignore
 from controllers.trading.fetchers.wrapper import get_historical_data
 from controllers.trading.mock_broker import MockBroker
 from controllers.trading.strategy import strategy_factory
@@ -152,9 +152,9 @@ class Trader:
                     logger.info(f"Adding data for {evaluation.symbol} {date}")
                     cerebro.adddata(dataframe)
                 is_working_event: Event = Event()
-                comminfo = IBKRComission()  # 0.5%
+                comminfo = IBKRCommission()  # 0.5%
                 cerebro.broker.addcommissioninfo(comminfo)
-                cerebro.broker.set_filler(bt.broker.filler.FixedSize)
+                cerebro.broker.set_filler(bt.broker.filler.FixedSize())
                 strategy = strategy_factory(
                     [evaluation.symbol for evaluation in filtered_evaluations],
                     arrow.get(date).datetime,

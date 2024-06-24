@@ -2,7 +2,7 @@
 from backtrader import CommInfoBase
 
 
-class IBKRComission(CommInfoBase):
+class IBKRCommission(CommInfoBase):
     params = (
         ("stocklike", True),
         ("commtype", CommInfoBase.COMM_PERC),
@@ -14,4 +14,4 @@ class IBKRComission(CommInfoBase):
 
         pseudoexec: if True the operation has not yet been executed
         """
-        return 0.005 * size
+        return abs(0.005 * size)
