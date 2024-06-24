@@ -132,13 +132,17 @@ def strategy_factory(
         def sell_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
             raise NotImplementedError()
 
-        def get_index_by_datetime(
-            self, datetime: datetime, curr_datetime: datetime
-        ) -> int:
-            return int((curr_datetime - datetime).seconds / self.tick_duration)
+        def adjust_time_index(self, index: int) -> int:
+            value = index * (60 / self.tick_duration)
+            if value % 1.0 != 0:
+                raise Exception("Value is not an integer")
+            return int(value)
+
+        def get_index_by_datetime(self, datetime: datetime) -> int:
+            pass
 
         def get_index_by_timedelta(self, timedelta: timedelta) -> int:
-            return int(timedelta.seconds / self.tick_duration)
+            pass
 
         def bracket_order_custom(
             self,
@@ -273,37 +277,11 @@ def strategy_factory(
                     data_manager.score = D("0")
                     continue
                 close_gap = (
-                    data.close[0]
-                    / data.open[
-                        (
-                            self.get_index_by_datetime(
-                                arrow.get(curr_datetime)
-                                .replace(hour=9, minute=34, second=0)
-                                .datetime,
-                                curr_datetime.datetime,
-                            ),
-                        )
-                    ]  # -85
+                    data.close[0] / data.open[(self.adjust_time_index(-85))]  # 9:34
                 ) - 1
                 if close_gap > 0:
-                    highest = max(
-                        data.high.get(
-                            size=self.get_index_by_datetime(
-                                arrow.get(curr_datetime)
-                                .replace(hour=9, minute=35, second=0)
-                                .datetime,
-                                curr_datetime.datetime,
-                            ),
-                        )
-                    )
-                    start_of_day = data.open[
-                        self.get_index_by_datetime(
-                            arrow.get(curr_datetime)
-                            .replace(hour=9, minute=30, second=0)
-                            .datetime,
-                            curr_datetime.datetime,
-                        ),
-                    ]
+                    highest = max(data.high.get(size=self.adjust_time_index(84)))
+                    start_of_day = data.open[self.adjust_time_index(-89)]
                     curr_diff, start_diff = (
                         highest - data.close[0],
                         highest - start_of_day,
