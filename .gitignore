@@ -10,6 +10,7 @@ virtualenv/
 atreyu-backtrader-api-1.0/
 IBJts/
 logs.txt
+demo_cache.sqlite
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
