@@ -167,61 +167,57 @@ def get_stock_response(
     end_date: arrow.Arrow,
     time_frame: int,
 ) -> Optional[DataFrame]:
-    for _ in range(2):
-        start_date = arrow.get(
-            start_date.datetime.replace(hour=9, minute=30, second=0, tzinfo=None)
+    start_date = arrow.get(
+        start_date.datetime.replace(hour=9, minute=30, second=0, tzinfo=None)
+    )
+    end_date = arrow.get(
+        end_date.datetime.replace(hour=16, minute=0, second=0, tzinfo=None)
+    )
+    try:
+        data = None
+        response = session.get(
+            "https://data.alpaca.markets/v2/stocks/bars",
+            params={
+                "symbols": evaluation.symbol,
+                "start": start_date.format(ALPACA_TIME_FORMAT),
+                "end": end_date.format(ALPACA_TIME_FORMAT),
+                "timeframe": f"{time_frame}Min",
+            },
+            headers={
+                "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],
+                "APCA-API-SECRET-KEY": os.environ["ALPACA_API_SECRET"],
+            },
         )
-        end_date = arrow.get(
-            end_date.datetime.replace(hour=16, minute=0, second=0, tzinfo=None)
-        )
-        try:
-            data = None
-            response = session.get(
-                "https://data.alpaca.markets/v2/stocks/bars",
-                params={
-                    "symbols": evaluation.symbol,
-                    "start": start_date.format(ALPACA_TIME_FORMAT),
-                    "end": end_date.format(ALPACA_TIME_FORMAT),
-                    "timeframe": f"{time_frame}Min",
-                },
-                headers={
-                    "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],
-                    "APCA-API-SECRET-KEY": os.environ["ALPACA_API_SECRET"],
-                },
-            )
-            if response.status_code != 200:
-                logger.error(
-                    f"Error getting stock response {response.text if response.text else ''}."
-                )
-                raise Exception("Error getting stock response")
-            data = response.json()
-            # Load the data into a DataFrame
-            df = DataFrame(data["bars"][evaluation.symbol])
-            # df.index = df.index - pd.DateOffset(hours=4)
-
-            # Convert the 't' column to datetime
-            df["t"] = df["t"].map(lambda d: arrow.get(d).to(TIMEZONE).datetime)
-
-            # Set the 't' column as the index
-            df.set_index("t", inplace=True)
-            df.rename(
-                columns={
-                    "c": "close",
-                    "h": "high",
-                    "l": "low",
-                    "n": "number",
-                    "o": "open",
-                    "v": "volume",
-                    "vw": "vwap",
-                },
-                inplace=True,
-            )
-            # evaluation.save_to_csv(df, start_date.datetime, end_date.datetime)
-            return df
-        except Exception as e:
+        if response.status_code != 200:
             logger.error(
-                f"Error getting stock response {data if data else ''}.", exc_info=True
+                f"Error getting stock response {response.text if response.text else ''}."
             )
-            pass
-    # evaluation.save_invalid_stock()
-    return None
+            return None
+        data = response.json()
+        # Load the data into a DataFrame
+        df = DataFrame(data["bars"][evaluation.symbol])
+        # df.index = df.index - pd.DateOffset(hours=4)
+
+        # Convert the 't' column to datetime
+        df["t"] = df["t"].map(lambda d: arrow.get(d).to(TIMEZONE).datetime)
+
+        # Set the 't' column as the index
+        df.set_index("t", inplace=True)
+        df.rename(
+            columns={
+                "c": "close",
+                "h": "high",
+                "l": "low",
+                "n": "number",
+                "o": "open",
+                "v": "volume",
+                "vw": "vwap",
+            },
+            inplace=True,
+        )
+        return df
+    except Exception as e:
+        logger.error(
+            f"Error getting stock response {data if data else ''}.", exc_info=True
+        )
+        return None

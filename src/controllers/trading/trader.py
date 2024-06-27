@@ -17,7 +17,7 @@ from controllers.trading.mock_broker import MockBroker
 from controllers.trading.strategy import strategy_factory
 from models.evaluation import Evaluation
 from models.trading import Stock
-from logger.logger import logger
+from logger.logger import logger, log_important
 
 
 class StrategyManager(BaseModel):
@@ -147,14 +147,17 @@ class Trader:
                     #     rtbar=True,
                     # )
                     data1 = get_historical_data(evaluation, 1)
-                    data2 = get_historical_data(evaluation, 3)
-                    if data1 is None or data2 is None:
+                    data3 = get_historical_data(evaluation, 3)
+                    data5 = get_historical_data(evaluation, 5)
+                    if data1 is None or data3 is None or data5 is None:
                         continue
                     dataframe1 = bt.feeds.PandasData(dataname=data1)
-                    dataframe2 = bt.feeds.PandasData(dataname=data2)
-                    logger.info(f"Adding data for {evaluation.symbol} {date}")
+                    dataframe3 = bt.feeds.PandasData(dataname=data3)
+                    dataframe5 = bt.feeds.PandasData(dataname=data5)
+                    log_important(f"Adding data for {evaluation.symbol} {date}", "info")
                     cerebro.adddata(dataframe1)
-                    cerebro.adddata(dataframe2)
+                    cerebro.adddata(dataframe3)
+                    cerebro.adddata(dataframe5)
                 is_working_event: Event = Event()
                 comminfo = IBKRCommission()  # 0.5%
                 cerebro.broker.addcommissioninfo(comminfo)
@@ -162,7 +165,6 @@ class Trader:
                 strategy = strategy_factory(
                     [evaluation.symbol for evaluation in filtered_evaluations],
                     arrow.get(date).datetime,
-                    60,
                     is_working_event,
                     "TEST",
                     _mock_broker_queue=self.mock_broker_queue,
@@ -174,7 +176,7 @@ class Trader:
                 IBStore.destroy()
                 self.store = None
                 cash = cerebro.broker.getcash()
-                print("cash: ", cash)
+                log_important(f"cash: {cash}", "info")
 
                 is_error = False
 

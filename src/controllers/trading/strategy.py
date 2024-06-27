@@ -13,14 +13,15 @@ from consts.time_consts import TIMEZONE
 from consts.trading_consts import STOP_LOSS, TARGET_PROFIT
 from controllers.trading.rsi import CustomRSI  # type: ignore
 from utils.math_utils import D
-from logger.logger import logger
+from logger.logger import logger, log_important
 
 
 class DataManager(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     data1: Any
-    data2: Any
+    data3: Any
+    data5: Any
     rsi: Any
     symbol: Optional[str] = None
     score: Optional[Decimal] = D("0")
@@ -38,7 +39,6 @@ class DataManager(BaseModel):
 def strategy_factory(
     symbols: list[str],
     _today: datetime,
-    _tick_duration: int,  # in seconds
     _working_signal: threading.Event,
     type: Literal["REAL", "TEST"],
     _mock_broker_queue: Optional[Queue[tuple[str, Any]]] = None,
@@ -46,7 +46,6 @@ def strategy_factory(
 
     class BaseStrategy(bt.Strategy):  # type: ignore
         today: datetime = _today
-        tick_duration: int = _tick_duration
 
         data_ready: bool = False
         is_in_position: bool = False
@@ -57,12 +56,13 @@ def strategy_factory(
 
         def __init__(self) -> None:
             super().__init__()
-            for index in range(0, len(self.datas), 2):
+            for index in range(0, len(self.datas), 3):
                 self.datas_manager.append(
                     DataManager(
                         data1=self.datas[index],
-                        data2=self.datas[index + 1],
-                        symbol=symbols[index // 2],
+                        data3=self.datas[index + 1],
+                        data5=self.datas[index + 2],
+                        symbol=symbols[index // 3],
                         rsi=CustomRSI(self.datas[index + 1], rsi_period=14),
                     )
                 )
@@ -114,8 +114,9 @@ def strategy_factory(
 
             if order.status in [order.Completed]:
                 if order == target_data_manager.initial_order:
-                    logger.info(
-                        f"{type} completed {target_data_manager.symbol} {curr_datetime.time()} share_price: {order.executed.price}, commission: {order.executed.comm}"
+                    log_important(
+                        f"{type} completed {target_data_manager.symbol} {curr_datetime.time()} share_price: {order.executed.price}, commission: {order.executed.comm}",
+                        "info",
                     )
                 else:
                     if target_data_manager.initial_order is not None:
@@ -126,8 +127,9 @@ def strategy_factory(
                                 * target_data_manager.initial_order.executed.size
                             )
                         ) * -1
-                        logger.info(
-                            f"{type} completed {target_data_manager.symbol} {curr_datetime.time()} share_price: {order.executed.price:.3f}, value: {value:.3f}, commission: {order.executed.comm}"
+                        log_important(
+                            f"{type} completed {target_data_manager.symbol} {curr_datetime.time()} share_price: {order.executed.price:.3f}, value: {value:.3f}, commission: {order.executed.comm}",
+                            "info",
                         )
                 self.bar_executed = len(self)
 
@@ -147,12 +149,16 @@ def strategy_factory(
         def sell_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
             raise NotImplementedError()
 
-        def get_index_by_datetime(self, datetime: arrow.Arrow) -> int:
+        def get_index_by_datetime(
+            self, datetime: arrow.Arrow, tick_size: int = 1
+        ) -> int:
             curr_datetime = self.get_curr_datetime()
-            return 0 - int((curr_datetime - datetime).seconds / self.tick_duration)
+            return 0 - int((curr_datetime - datetime).seconds // 60 // tick_size)
 
-        def get_index_by_timedelta(self, timedelta: timedelta) -> int:
-            return 0 - int(timedelta.seconds / self.tick_duration)
+        def get_index_by_timedelta(
+            self, timedelta: timedelta, tick_size: int = 1
+        ) -> int:
+            return 0 - int(timedelta.seconds // 60 // tick_size)
 
         def bracket_order_custom(
             self,
@@ -226,22 +232,37 @@ def strategy_factory(
 
             return main, limit_price, stop_price
 
-        def get_close_gap(self, data: Any, curr_datetime: arrow.Arrow) -> Decimal:
+        def get_close_gap_percent(
+            self, data_manager: DataManager, curr_datetime: arrow.Arrow
+        ) -> Decimal:
             close_gap = (
-                data.close[0]
-                / data.open[
+                data_manager.data1.close[0]
+                / data_manager.data1.open[
                     self.get_index_by_datetime(
-                        arrow.get(curr_datetime).replace(hour=9, minute=34, second=0),
+                        arrow.get(curr_datetime).replace(hour=9, minute=35, second=0),
                     )
                 ]
             ) - 1
             return D(close_gap)
 
-        def get_average_volume(self, data: Any) -> int:
+        def get_close_gap_difference(
+            self, data_manager: DataManager, curr_datetime: arrow.Arrow
+        ) -> Decimal:
+            close_gap = (
+                data_manager.data1.close[0]
+                - data_manager.data1.open[
+                    self.get_index_by_datetime(
+                        arrow.get(curr_datetime).replace(hour=9, minute=35, second=0),
+                    )
+                ]
+            )
+            return D(close_gap)
+
+        def get_average_volume(self, data_manager: DataManager) -> int:
             curr_datetime = self.get_curr_datetime()
-            return int(
+            average_volume = int(
                 average(
-                    data.volume.get(
+                    data_manager.data1.volume.get(
                         size=abs(
                             self.get_index_by_datetime(
                                 arrow.get(curr_datetime).replace(
@@ -252,7 +273,7 @@ def strategy_factory(
                     )
                 )
                 * average(
-                    data.open.get(
+                    data_manager.data1.open.get(
                         size=abs(
                             self.get_index_by_datetime(
                                 arrow.get(curr_datetime).replace(
@@ -263,12 +284,18 @@ def strategy_factory(
                     )
                 )
             )
+            log_important(
+                f"Average volume for {data_manager.symbol}: {average_volume}", "info"
+            )
+            return average_volume
 
-        def should_trade_stock(self, data: Any, is_buy: bool) -> bool:
+        def should_trade_stock(self, data_manager: DataManager) -> bool:
+            if data_manager.close_gap is None:
+                raise Exception("Close gap is None")
             curr_datetime = self.get_curr_datetime()
-            if is_buy:
+            if data_manager.close_gap > 0:
                 highest = max(
-                    data.high.get(
+                    data_manager.data1.high.get(
                         size=abs(
                             self.get_index_by_datetime(
                                 arrow.get(curr_datetime).replace(
@@ -278,18 +305,18 @@ def strategy_factory(
                         )
                     )
                 )
-                start_of_day = data.open[
+                start_of_day = data_manager.data1.open[
                     self.get_index_by_datetime(
                         arrow.get(curr_datetime).replace(hour=9, minute=30, second=0),
                     )
                 ]
                 curr_diff, start_diff = (
-                    highest - data.close[0],
+                    highest - data_manager.data1.close[0],
                     highest - start_of_day,
                 )
             else:
                 lowest = min(
-                    data.low.get(
+                    data_manager.data1.low.get(
                         size=abs(
                             self.get_index_by_datetime(
                                 arrow.get(curr_datetime).replace(
@@ -299,73 +326,35 @@ def strategy_factory(
                         )
                     )
                 )
-                start_of_day = data.open[
+                start_of_day = data_manager.data1.open[
                     self.get_index_by_datetime(
                         arrow.get(curr_datetime).replace(hour=9, minute=30, second=0),
                     )
                 ]
                 curr_diff, start_diff = (
-                    data.close[0] - lowest,
+                    data_manager.data1.close[0] - lowest,
                     start_of_day - lowest,
                 )
 
             if bool(curr_diff * start_diff > 0 and curr_diff > 0.5 * start_diff):
                 return False
 
-            highest_open = max(
-                data.open.get(
-                    size=abs(
-                        self.get_index_by_datetime(
-                            arrow.get(curr_datetime).replace(
-                                hour=10, minute=0, second=0
-                            )
-                        )
-                    )
-                )
+            absolute_gap = 0
+            start_index = self.get_index_by_datetime(
+                arrow.get(curr_datetime).replace(
+                    hour=9,
+                    minute=40,
+                    second=0,
+                ),
+                tick_size=5,
             )
 
-            lowest_open = min(
-                data.open.get(
-                    size=abs(
-                        self.get_index_by_datetime(
-                            arrow.get(curr_datetime).replace(
-                                hour=10, minute=0, second=0
-                            )
-                        )
-                    )
+            for i in range(start_index, 1):
+                absolute_gap += abs(
+                    data_manager.data5.close[i] - data_manager.data5.close[i - 1]
                 )
-            )
-            if is_buy:
-                if highest_open > data.close[0] and (
-                    highest_open - data.close[0]
-                ) * 0.5 > (data.close[0] - lowest_open):
-                    return False
-
-                if (
-                    data.close[self.get_index_by_timedelta(timedelta(minutes=39))]
-                    - data.close[0]
-                    > 0
-                    and data.close[self.get_index_by_timedelta(timedelta(minutes=14))]
-                    - data.close[0]
-                    > 0
-                ):
-                    return False
-            else:
-                if lowest_open < data.close[0] and (
-                    data.close[0] - lowest_open
-                ) * 0.5 > (highest_open - data.close[0]):
-                    return False
-
-                if (
-                    data.close[0]
-                    - data.close[self.get_index_by_timedelta(timedelta(minutes=39))]
-                    > 0
-                    and data.close[0]
-                    - data.close[self.get_index_by_timedelta(timedelta(minutes=14))]
-                    > 0
-                ):
-                    return False
-
+            if absolute_gap > abs(data_manager.close_gap) * 6:
+                return False
             return True
 
         def get_curr_datetime(self) -> arrow.Arrow:
@@ -471,7 +460,7 @@ def strategy_factory(
             for data_manager in self.datas_manager:
                 data = data_manager.data1
                 try:
-                    data_manager.average_volume = self.get_average_volume(data)
+                    data_manager.average_volume = self.get_average_volume(data_manager)
                 except Exception:
                     logger.warning(
                         f"Error getting average volume {data_manager.symbol}",
@@ -482,27 +471,31 @@ def strategy_factory(
                     data_manager.average_volume is None
                     or data_manager.average_volume < 10000
                 ):
-                    logger.info(f"Not trading {data_manager.symbol}")
+                    log_important(f"Not trading {data_manager.symbol}", "info")
                     data_manager.score = D("0")
                     continue
-                close_gap = self.get_close_gap(data, curr_datetime)
-                if close_gap > 0:
-                    should_trade_stock = self.should_trade_stock(data, is_buy=True)
+                data_manager.close_gap = self.get_close_gap_difference(
+                    data_manager, curr_datetime
+                )
+                if data_manager.close_gap > 0:
+                    should_trade_stock = self.should_trade_stock(data_manager)
                     if not should_trade_stock:
                         data_manager.score = D("0")
-                        logger.info(f"Not trading {data_manager.symbol}")
+                        log_important(f"Not trading {data_manager.symbol}", "info")
                     else:
-                        data_manager.score = D(abs(close_gap))
+                        data_manager.score = D(
+                            abs(self.get_close_gap_percent(data_manager, curr_datetime))
+                        )
                 else:
-                    should_trade_stock = self.should_trade_stock(data, is_buy=False)
+                    should_trade_stock = self.should_trade_stock(data_manager)
                     if not should_trade_stock:
                         data_manager.score = D("0")
-                        logger.info(f"Not trading {data_manager.symbol}")
+                        log_important(f"Not trading {data_manager.symbol}", "info")
                         continue
                     else:
-                        data_manager.score = D(abs(close_gap))
-                data_manager.close_gap = D(close_gap)
-
+                        data_manager.score = D(
+                            abs(self.get_close_gap_percent(data_manager, curr_datetime))
+                        )
             # Entering position with stocks with highest scores
             filtered_scores: list[DataManager] = []
             for data_manager in self.datas_manager:
@@ -593,7 +586,6 @@ def strategy_factory(
                     average_volume // 2,
                     int(D(self.get_cash() * 0.99) // D(price) // divider),
                 )
-                logger.info(f"Size: {size}")
                 return size
 
         return TestStrategy

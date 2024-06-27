@@ -5,7 +5,12 @@ import sys
 
 from discord_webhook import DiscordWebhook
 
-from consts.data_consts import BACKUP_COUNT, LOG_FILE_PATH, ROTATING_FILE_MAX_SIZE
+from consts.data_consts import (
+    BACKUP_COUNT,
+    IMPORTANT_LOG_FILE_PATH,
+    LOG_FILE_PATH,
+    ROTATING_FILE_MAX_SIZE,
+)
 
 
 class DiscordHandler(logging.StreamHandler):  # type: ignore
@@ -21,8 +26,10 @@ class DiscordHandler(logging.StreamHandler):  # type: ignore
         discord_webhook.execute()
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("basic")
 logger.setLevel(logging.INFO)
+important_logger = logging.getLogger("important")
+important_logger.setLevel(logging.INFO)
 formatter = logging.Formatter(
     "%(asctime)s | %(threadName)s | %(levelname)s | %(message)s"
 )
@@ -32,6 +39,12 @@ file_handler = RotatingFileHandler(
 )
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(formatter)
+
+important_file_handler = RotatingFileHandler(
+    IMPORTANT_LOG_FILE_PATH, maxBytes=ROTATING_FILE_MAX_SIZE, backupCount=BACKUP_COUNT
+)
+important_file_handler.setLevel(logging.INFO)
+important_file_handler.setFormatter(formatter)
 
 stdout_handler = logging.StreamHandler(sys.stdout)
 stdout_handler.setLevel(logging.DEBUG)
@@ -44,3 +57,10 @@ discord_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 logger.addHandler(stdout_handler)
 logger.addHandler(discord_handler)
+
+important_logger.addHandler(important_file_handler)
+
+
+def log_important(message: str, level: str) -> None:
+    getattr(important_logger, level)(message)
+    getattr(logger, level)(message)

@@ -5,7 +5,7 @@ import numpy as np
 from numpy import ndarray as NDArray
 
 from consts.algorithem_consts import ANALYSIS_GAP
-from consts.trading_consts import MAX_STOP_LOSS
+from consts.trading_consts import STOP_LOSS
 from models.evaluation import EvaluationResults
 from models.math import Extremum
 from utils.math_utils import D
@@ -60,12 +60,10 @@ def get_best_average(averages_list: list[dict[str, Decimal]]) -> dict[str, Decim
 def get_possible_stop_losses(target_profit: Decimal) -> NDArray[Any, Any]:
     if target_profit > 0:
         return np.arange(
-            (0 - MAX_STOP_LOSS).max(0 - target_profit), 0 - ANALYSIS_GAP, ANALYSIS_GAP
+            (0 - STOP_LOSS).max(0 - target_profit), 0 - ANALYSIS_GAP, ANALYSIS_GAP
         )
     else:
-        return np.arange(
-            ANALYSIS_GAP, MAX_STOP_LOSS.min(0 - target_profit), ANALYSIS_GAP
-        )
+        return np.arange(ANALYSIS_GAP, STOP_LOSS.min(0 - target_profit), ANALYSIS_GAP)
 
 
 def get_average_for_ratio(
