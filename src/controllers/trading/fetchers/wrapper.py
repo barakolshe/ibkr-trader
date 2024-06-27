@@ -176,7 +176,6 @@ def get_stock_response(
         )
         try:
             data = None
-            time.sleep(5)
             response = session.get(
                 "https://data.alpaca.markets/v2/stocks/bars",
                 params={
@@ -224,5 +223,5 @@ def get_stock_response(
                 f"Error getting stock response {data if data else ''}.", exc_info=True
             )
             pass
-    evaluation.save_invalid_stock()
+    # evaluation.save_invalid_stock()
     return None

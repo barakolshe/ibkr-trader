@@ -101,6 +101,8 @@ class Trader:
         min_date.replace(hour=0, minute=0, second=0)
         max_date.replace(hour=0, minute=0, second=0)
 
+        logger.info(f"{min_date}  -   {max_date}")
+
         date_range = [
             min_date.datetime + timedelta(days=delta)
             for delta in range((max_date.datetime - min_date.datetime).days + 1)

@@ -1,0 +1,3 @@
+no-rsi, 2 stop loss - 46871.93260000007
+no-rsi, 1.5 stop loss = 47051.33760000002
+no-rsi, without second check = 45856.922300000006

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 # from IBJts.source.pythonclient.ibapi import order
 from consts.time_consts import TIMEZONE
+from consts.trading_consts import STOP_LOSS, TARGET_PROFIT
 from controllers.trading.rsi import CustomRSI  # type: ignore
 from utils.math_utils import D
 from logger.logger import logger
@@ -130,7 +131,10 @@ def strategy_factory(
                         )
                 self.bar_executed = len(self)
 
-            if self.did_leave_position and self.position.size == 0:
+            if self.did_leave_position:
+                for data_manager in self.datas_manager:
+                    if self.getposition(data=data_manager.data1).size != 0:
+                        return
                 self.stop_run()
 
         def stop_run(self) -> None:
@@ -241,7 +245,7 @@ def strategy_factory(
                         size=abs(
                             self.get_index_by_datetime(
                                 arrow.get(curr_datetime).replace(
-                                    hour=9, minute=35, second=0
+                                    hour=10, minute=0, second=0
                                 ),
                             )
                         )
@@ -252,7 +256,7 @@ def strategy_factory(
                         size=abs(
                             self.get_index_by_datetime(
                                 arrow.get(curr_datetime).replace(
-                                    hour=9, minute=35, second=0
+                                    hour=10, minute=0, second=0
                                 ),
                             )
                         )
@@ -466,7 +470,14 @@ def strategy_factory(
             # Iterating datas and checking stats
             for data_manager in self.datas_manager:
                 data = data_manager.data1
-                data_manager.average_volume = self.get_average_volume(data)
+                try:
+                    data_manager.average_volume = self.get_average_volume(data)
+                except Exception:
+                    logger.warning(
+                        f"Error getting average volume {data_manager.symbol}",
+                        exc_info=True,
+                    )
+                    data_manager.average_volume = 0
                 if (
                     data_manager.average_volume is None
                     or data_manager.average_volume < 10000
@@ -517,9 +528,9 @@ def strategy_factory(
                     ) = self.bracket_order_custom(
                         data=data,
                         size=size,
-                        limitprice=data.close[0] * 1.05,
+                        limitprice=data.close[0] * (1 + TARGET_PROFIT),
                         price=data.close[0],
-                        stopprice=data.close[0] * 0.98,
+                        stopprice=data.close[0] * (1 - STOP_LOSS),
                         parent_valid=timedelta(minutes=30),
                         children_valid=timedelta(hours=4),
                         order_type="long",
@@ -532,9 +543,9 @@ def strategy_factory(
                     ) = self.bracket_order_custom(
                         data=data,
                         size=size,
-                        limitprice=data.close[0] * 0.95,
+                        limitprice=data.close[0] * (1 - TARGET_PROFIT),
                         price=data.close[0],
-                        stopprice=data.close[0] * 1.02,
+                        stopprice=data.close[0] * (1 + STOP_LOSS),
                         parent_valid=timedelta(minutes=30),
                         children_valid=timedelta(hours=4),
                         order_type="short",
