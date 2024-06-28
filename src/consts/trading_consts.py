@@ -19,7 +19,7 @@ def get_end_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
 
 
 STOP_LOSS = 0.015
-TARGET_PROFIT = 0.05
+TARGET_PROFIT = 0.04
 
 CLOSE_GAP_MULTIPLIER_THRESHOLD = 4
 
