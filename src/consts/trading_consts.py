@@ -25,4 +25,8 @@ CLOSE_GAP_MULTIPLIER_THRESHOLD = 6
 
 EXTREMUM_DIFF_THRESHOLD = 0.5
 
+SHOULD_USE_RSI = False
+
+CHECK_PEAKS = True
+
 # enter_trade_datetime = datetime()
