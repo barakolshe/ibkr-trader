@@ -59,11 +59,9 @@ def get_best_average(averages_list: list[dict[str, Decimal]]) -> dict[str, Decim
 
 def get_possible_stop_losses(target_profit: Decimal) -> NDArray[Any, Any]:
     if target_profit > 0:
-        return np.arange(
-            (0 - STOP_LOSS).max(0 - target_profit), 0 - ANALYSIS_GAP, ANALYSIS_GAP
-        )
+        return np.arange(0 - STOP_LOSS, 0 - ANALYSIS_GAP, ANALYSIS_GAP)
     else:
-        return np.arange(ANALYSIS_GAP, STOP_LOSS.min(0 - target_profit), ANALYSIS_GAP)
+        return np.arange(ANALYSIS_GAP, STOP_LOSS, ANALYSIS_GAP)
 
 
 def get_average_for_ratio(
