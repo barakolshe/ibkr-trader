@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Generator, Literal, Optional, Union
 from consts.time_consts import TIMEZONE

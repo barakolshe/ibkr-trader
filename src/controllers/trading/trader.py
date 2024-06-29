@@ -114,9 +114,7 @@ class Trader:
             filtered_evaluations = [
                 evaluation
                 for evaluation in evaluations
-                if arrow.get(date).shift(days=-1).replace(hour=16, minute=0, second=0)
-                < evaluation.timestamp
-                < arrow.get(date).replace(hour=9, minute=30, second=0)
+                if arrow.get(date).date() == arrow.get(evaluation.timestamp).date()
             ]
             if date.weekday() == 5 or date.weekday() == 6:
                 waiting_stocks.extend(filtered_evaluations)
@@ -125,29 +123,7 @@ class Trader:
             waiting_stocks = []
             if len(filtered_evaluations) == 0:
                 continue
-            # self.store = IBStore(
-            #     host="127.0.0.1", port=7497, clientId=randint(0, 500), _debug=True
-            # )
             for evaluation in filtered_evaluations:
-                print(arrow.get(date).shift(days=1).datetime.replace(tzinfo=None))
-                # data = self.store.getdata(
-                #     name=evaluation.symbol,  # Data name
-                #     dataname=evaluation.symbol,  # Symbol name
-                #     secType="STK",  # SecurityType is STOCK
-                #     exchange="SMART",  # Trading exchange IB's SMART exchange
-                #     currency="USD",  # Currency of SecurityType
-                #     fromdate=arrow.get(
-                #         arrow.get(date).shift(days=-1).date()
-                #     ).datetime.replace(tzinfo=None),
-                #     todate=arrow.get(
-                #         arrow.get(date).shift(days=1).date()
-                #     ).datetime.replace(tzinfo=None),
-                #     timeframe=bt.TimeFrame.Minutes,
-                #     historical=True,
-                #     # what="MIDPOINT",
-                #     rtbar=True,
-                # )
-                time.sleep(1)
                 data1 = get_historical_data(evaluation, 1)
                 data3 = get_historical_data(evaluation, 3)
                 data5 = get_historical_data(evaluation, 5)

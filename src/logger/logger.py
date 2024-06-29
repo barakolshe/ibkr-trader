@@ -50,13 +50,13 @@ stdout_handler = logging.StreamHandler(sys.stdout)
 stdout_handler.setLevel(logging.DEBUG)
 stdout_handler.setFormatter(formatter)
 
-discord_handler = DiscordHandler()
-discord_handler.setLevel(logging.ERROR)
-discord_handler.setFormatter(formatter)
+# discord_handler = DiscordHandler()
+# discord_handler.setLevel(logging.ERROR)
+# discord_handler.setFormatter(formatter)
 
 logger.addHandler(file_handler)
 logger.addHandler(stdout_handler)
-logger.addHandler(discord_handler)
+# logger.addHandler(discord_handler)
 
 important_logger.addHandler(important_file_handler)
 

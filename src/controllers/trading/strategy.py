@@ -36,10 +36,10 @@ class DataManager(BaseModel):
     rsi: Any
     symbol: Optional[str] = None
     score: Optional[Decimal] = D("0")
-    close_gap: Optional[Decimal] = D("0")
+    close_gap: Optional[float] = 0
     average_volume: Optional[int] = None
     should_use_rsi: bool = False
-    peak_price_gap: Optional[Decimal] = None
+    peak_price_gap: Optional[float] = None
     is_in_position: bool = False
     did_leave_position: bool = False
 
@@ -258,8 +258,8 @@ def strategy_factory(
 
         def get_close_gap_difference(
             self, data_manager: DataManager, datetime: arrow.Arrow
-        ) -> Decimal:
-            close_gap = (
+        ) -> float:
+            close_gap: float = (
                 data_manager.data1.close[0]
                 - data_manager.data1.open[
                     self.get_index_by_datetime(
@@ -267,7 +267,7 @@ def strategy_factory(
                     )
                 ]
             )
-            return D(close_gap)
+            return close_gap
 
         def get_average_volume(self, data_manager: DataManager) -> int:
             average_volume = int(
@@ -364,6 +364,12 @@ def strategy_factory(
             return arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE)
 
         def make_end_market_order(self, data_manager: DataManager) -> None:
+            if (
+                data_manager.initial_order is None
+                or data_manager.limit_price_order is None
+                or data_manager.stop_price_order is None
+            ):
+                raise Exception("Initial order is None")
             if data_manager.initial_order.isbuy():
                 data_manager.market_order = self.sell_custom(
                     data=data_manager.data1,
@@ -474,7 +480,10 @@ def strategy_factory(
                     data_manager.is_in_position = True
                 else:
                     data_manager.score = D(
-                        abs(self.get_close_gap_percent(data_manager, curr_datetime))
+                        abs(self.get_close_gap_percent(data_manager, curr_datetime) * 100)
+                    )
+                    logger.info(
+                        f"Score for {data_manager.symbol}: {data_manager.score}"
                     )
             else:
                 should_trade_stock = self.should_trade_stock(data_manager)
@@ -482,7 +491,10 @@ def strategy_factory(
                     data_manager.is_in_position = True
                 else:
                     data_manager.score = D(
-                        abs(self.get_close_gap_percent(data_manager, curr_datetime))
+                        abs(self.get_close_gap_percent(data_manager, curr_datetime) * 100)
+                    )
+                    logger.info(
+                        f"Score for {data_manager.symbol}: {data_manager.score}"
                     )
 
         def enter_position(self) -> None:
@@ -503,6 +515,7 @@ def strategy_factory(
             sorted_scores: list[DataManager] = sorted(
                 filtered_scores, key=lambda x: x.score, reverse=True  # type: ignore
             )[0:3]
+            cash = self.get_cash()
             for data_manager in sorted_scores:
                 if data_manager.is_in_position:
                     continue
@@ -512,6 +525,7 @@ def strategy_factory(
                 size = self.get_size(
                     data.close[0],
                     data_manager.average_volume,
+                    cash,
                     len(sorted_scores),
                 )
                 if data_manager.close_gap is not None and data_manager.close_gap > D(
@@ -549,6 +563,8 @@ def strategy_factory(
                 curr_rsi = data_manager.rsi[0]
                 # logger.info(f"INITIAL RSI: {curr_rsi}")
                 data_manager.should_use_rsi = curr_rsi >= 40 and curr_rsi <= 60
+
+            for data_manager in self.data_managers:
                 data_manager.is_in_position = True
 
         def check_peaks(self) -> None:
@@ -559,7 +575,7 @@ def strategy_factory(
                     or data_manager.did_leave_position
                 ):
                     continue
-                if data_manager.close_gap > 0:
+                if data_manager.close_gap is not None and data_manager.close_gap > 0:
                     if (
                         data_manager.data1.close[0]
                         > 1.01 * data_manager.initial_order.executed.price
@@ -639,7 +655,9 @@ def strategy_factory(
             if SHOULD_USE_RSI:
                 self.check_rsi()
 
-        def get_size(self, price: Decimal, average_volume: int, divider: int) -> int:
+        def get_size(
+            self, price: Decimal, average_volume: int, cash: float, divider: int
+        ) -> int:
             raise NotImplementedError()
 
     if type == "TEST":
@@ -671,11 +689,11 @@ def strategy_factory(
                 _mock_broker_queue.put(("SET", cash))
 
             def get_size(
-                self, price: Decimal, average_volume: int, divider: int
+                self, price: Decimal, average_volume: int, cash: float, divider: int
             ) -> int:
                 size = min(
                     average_volume // 2,
-                    int(D(self.get_cash() * 0.99) // D(price) // divider),
+                    int(D(cash * 0.99) // D(price) // divider),
                 )
                 return size
 
@@ -712,7 +730,7 @@ def strategy_factory(
                 return self.data_ready
 
             def get_size(
-                self, price: Decimal, average_volume: int, divider: int
+                self, price: Decimal, average_volume: int, cash: float, divider: int
             ) -> int:
                 return min(
                     average_volume // 2,

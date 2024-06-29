@@ -97,22 +97,16 @@ def get_historical_data(
     evaluation: Evaluation,
     time_frame: int,
 ) -> Optional[DataFrame]:
-    start_date = arrow.get(evaluation.timestamp, TIMEZONE)
-    end_date = arrow.get(evaluation.timestamp, TIMEZONE).shift(days=1)
-    # if evaluation.does_csv_file_exist():
-    #     if evaluation.is_stock_known_invalid() or evaluation.symbol == "":
-    #         return None
-    #     matching_file = evaluation.get_matching_csv(
-    #         start_date.datetime, end_date.datetime
-    #     )
-    #     if matching_file:
-    #         return get_historical_data_from_file(
-    #             evaluation,
-    #             matching_file,
-    #             start_date.datetime,
-    #             end_date.datetime,
-    #             time_limit,
-    #         )
+    start_date = (
+        arrow.get(evaluation.timestamp, TIMEZONE)
+        .shift(days=-1)
+        .replace(hour=9, minute=30, second=0, tzinfo=None)
+    )
+    end_date = (
+        arrow.get(evaluation.timestamp, TIMEZONE)
+        .shift(days=1)
+        .replace(hour=16, minute=0, second=0, tzinfo=None)
+    )
     df = get_stock_response(evaluation, start_date, end_date, time_frame)
     if df is None:
         return None
@@ -127,8 +121,18 @@ def complete_missing_values(df: DataFrame, minute_gap: int = 1) -> DataFrame:
     df = df.sort_index()
 
     # Generate a complete datetime index for all minutes of the day
-    start_time = df.index.min().replace(second=0, microsecond=0)
-    end_time = df.index.max().replace(second=0, microsecond=0)
+    min_start_time = df.index.min().replace(second=0, microsecond=0)
+    if min_start_time.hour > 9 or (
+        min_start_time.hour == 9 and min_start_time.minute > 30
+    ):
+        start_time = min_start_time.replace(hour=9, minute=30)
+    else:
+        start_time = min_start_time
+    max_end_time = df.index.max().replace(second=0, microsecond=0)
+    if max_end_time.hour < 16 or (max_end_time.hour == 16 and max_end_time.minute > 0):
+        end_time = max_end_time.replace(hour=16, minute=0)
+    else:
+        end_time = max_end_time
     complete_index = pd.date_range(
         start=start_time, end=end_time, freq=f"{minute_gap}min"
     )
@@ -137,7 +141,6 @@ def complete_missing_values(df: DataFrame, minute_gap: int = 1) -> DataFrame:
     df_reindexed = df.reindex(complete_index)
 
     # Forward fill the 'close' column to get the previous row's close price
-    # Please fix this
     df_reindexed["close"] = df_reindexed["close"].ffill()
 
     # Set 'open', 'high', 'low', and 'close' to the forward filled 'close' value
@@ -167,12 +170,6 @@ def get_stock_response(
     end_date: arrow.Arrow,
     time_frame: int,
 ) -> Optional[DataFrame]:
-    start_date = arrow.get(
-        start_date.datetime.replace(hour=9, minute=30, second=0, tzinfo=None)
-    )
-    end_date = arrow.get(
-        end_date.datetime.replace(hour=16, minute=0, second=0, tzinfo=None)
-    )
     try:
         data = None
         response = session.get(
