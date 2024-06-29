@@ -298,47 +298,6 @@ def strategy_factory(
         def should_trade_stock(self, data_manager: DataManager) -> bool:
             if data_manager.close_gap is None:
                 raise Exception("Close gap is None")
-            start_of_day = data_manager.data1.open[
-                self.get_index_by_datetime(
-                    get_analysis_start_datetime(self.today).shift(minutes=-5),
-                )
-            ]
-            if data_manager.close_gap > 0:
-                highest = max(
-                    data_manager.data1.high.get(
-                        size=abs(
-                            self.get_index_by_datetime(
-                                get_analysis_start_datetime(self.today)
-                            )
-                        )
-                    )
-                )
-
-                start_diff = highest - start_of_day
-                curr_diff = highest - data_manager.data1.close[0]
-            else:
-                lowest = min(
-                    data_manager.data1.low.get(
-                        size=abs(
-                            self.get_index_by_datetime(
-                                get_analysis_start_datetime(self.today),
-                            )
-                        )
-                    )
-                )
-
-                curr_diff = data_manager.data1.close[0] - lowest
-                start_diff = start_of_day - lowest
-
-            if bool(
-                curr_diff * start_diff > 0
-                and curr_diff > EXTREMUM_DIFF_THRESHOLD * start_diff
-            ):
-                log_important(
-                    f"Not trading {data_manager.symbol} because of extremum gap", "info"
-                )
-                return False
-
             absolute_gap = 0
             start_index = self.get_index_by_datetime(
                 get_analysis_start_datetime(self.today).shift(minutes=5),
@@ -480,10 +439,13 @@ def strategy_factory(
                     data_manager.is_in_position = True
                 else:
                     data_manager.score = D(
-                        abs(self.get_close_gap_percent(data_manager, curr_datetime) * 100)
+                        abs(
+                            self.get_close_gap_percent(data_manager, curr_datetime)
+                            * 100
+                        )
                     )
-                    logger.info(
-                        f"Score for {data_manager.symbol}: {data_manager.score}"
+                    log_important(
+                        f"Score for {data_manager.symbol}: {data_manager.score}", "info"
                     )
             else:
                 should_trade_stock = self.should_trade_stock(data_manager)
@@ -491,10 +453,13 @@ def strategy_factory(
                     data_manager.is_in_position = True
                 else:
                     data_manager.score = D(
-                        abs(self.get_close_gap_percent(data_manager, curr_datetime) * 100)
+                        abs(
+                            self.get_close_gap_percent(data_manager, curr_datetime)
+                            * 100
+                        )
                     )
-                    logger.info(
-                        f"Score for {data_manager.symbol}: {data_manager.score}"
+                    log_important(
+                        f"Score for {data_manager.symbol}: {data_manager.score}", "info"
                     )
 
         def enter_position(self) -> None:

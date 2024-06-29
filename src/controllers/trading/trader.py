@@ -132,7 +132,9 @@ class Trader:
                 dataframe1 = bt.feeds.PandasData(dataname=data1)
                 dataframe3 = bt.feeds.PandasData(dataname=data3)
                 dataframe5 = bt.feeds.PandasData(dataname=data5)
-                log_important(f"Adding data for {evaluation.symbol} {date}", "info")
+                log_important(
+                    f"Adding data for {evaluation.symbol} {date.date()}", "info"
+                )
                 cerebro.adddata(dataframe1)
                 cerebro.adddata(dataframe3)
                 cerebro.adddata(dataframe5)
