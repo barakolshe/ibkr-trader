@@ -35,9 +35,10 @@ class DataManager(BaseModel):
     data5: Any
     rsi: Any
     symbol: Optional[str] = None
-    score: Optional[Decimal] = D("0")
+    score: Optional[float] = 0
     close_gap: Optional[float] = 0
     average_volume: Optional[int] = None
+    absolute_gap: Optional[float] = 0
     should_use_rsi: bool = False
     peak_price_gap: Optional[float] = None
     is_in_position: bool = False
@@ -243,10 +244,10 @@ def strategy_factory(
 
             return main, limit_price, stop_price
 
-        def get_close_gap_percent(
+        def get_close_gap_percentage(
             self, data_manager: DataManager, curr_datetime: arrow.Arrow
-        ) -> Decimal:
-            close_gap = (
+        ) -> float:
+            close_gap: float = (
                 data_manager.data1.close[0]
                 / data_manager.data1.open[
                     self.get_index_by_datetime(
@@ -254,7 +255,7 @@ def strategy_factory(
                     )
                 ]
             ) - 1
-            return D(close_gap)
+            return close_gap
 
         def get_close_gap_difference(
             self, data_manager: DataManager, datetime: arrow.Arrow
@@ -317,6 +318,7 @@ def strategy_factory(
                 )
                 return False
 
+            data_manager.absolute_gap = abs(data_manager.close_gap) / absolute_gap
             return True
 
         def get_curr_datetime(self) -> arrow.Arrow:
@@ -438,12 +440,14 @@ def strategy_factory(
                 if not should_trade_stock:
                     data_manager.is_in_position = True
                 else:
-                    data_manager.score = D(
-                        abs(
-                            self.get_close_gap_percent(data_manager, curr_datetime)
-                            * 100
-                        )
+                    if data_manager.absolute_gap is None:
+                        raise Exception("Absolute gap is None")
+                    data_manager.score = (
+                        abs(self.get_close_gap_percentage(data_manager, curr_datetime))
+                        * data_manager.absolute_gap
+                        * 100
                     )
+
                     log_important(
                         f"Score for {data_manager.symbol}: {data_manager.score}", "info"
                     )
@@ -452,11 +456,12 @@ def strategy_factory(
                 if not should_trade_stock:
                     data_manager.is_in_position = True
                 else:
-                    data_manager.score = D(
-                        abs(
-                            self.get_close_gap_percent(data_manager, curr_datetime)
-                            * 100
-                        )
+                    if data_manager.absolute_gap is None:
+                        raise Exception("Absolute gap is None")
+                    data_manager.score = (
+                        abs(self.get_close_gap_percentage(data_manager, curr_datetime))
+                        * data_manager.absolute_gap
+                        * 100
                     )
                     log_important(
                         f"Score for {data_manager.symbol}: {data_manager.score}", "info"
@@ -475,7 +480,7 @@ def strategy_factory(
             # Entering position with stocks with highest scores
             filtered_scores: list[DataManager] = []
             for data_manager in self.data_managers:
-                if data_manager.score is not None and data_manager.score > D("0"):
+                if data_manager.score is not None and data_manager.score > 0:
                     filtered_scores.append(data_manager)
             sorted_scores: list[DataManager] = sorted(
                 filtered_scores, key=lambda x: x.score, reverse=True  # type: ignore
