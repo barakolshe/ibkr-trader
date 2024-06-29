@@ -8,7 +8,6 @@ import backtrader as bt
 from numpy import average
 from pydantic import BaseModel, ConfigDict
 
-# from IBJts.source.pythonclient.ibapi import order
 from consts.time_consts import TIMEZONE
 from consts.trading_consts import (
     CHECK_PEAKS,
@@ -21,10 +20,21 @@ from consts.trading_consts import (
     get_start_datetime,
     get_volume_analysis_start_datetime,
 )
-from controllers.trading.indicators.adx import ADX # type: ignore
+from controllers.trading.indicators.adx import ADX  # type: ignore
 from controllers.trading.indicators.rsi import CustomRSI  # type: ignore
 from utils.math_utils import D
 from logger.logger import logger, log_important
+
+
+def interpolate_volume(
+    volume: float, min_volume: int = 10000, max_volume: int = 20000
+) -> float:
+    if volume <= min_volume:
+        return 0.5
+    elif volume >= max_volume:
+        return 1
+    else:
+        return 0.5 + (1 - 0.5) * (volume - min_volume) / (max_volume - min_volume)
 
 
 class DataManager(BaseModel):
@@ -77,7 +87,7 @@ def strategy_factory(
                         data3=self.datas[index + 1],
                         data5=self.datas[index + 2],
                         symbol=symbols[index // 3],
-                        adx=ADX(self.datas[index + 2], period=12),
+                        adx=ADX(self.datas[index + 1]),
                         # rsi=CustomRSI(self.datas[index + 1], rsi_period=14),
                     )
                 )
@@ -303,7 +313,9 @@ def strategy_factory(
                 raise Exception("Close gap is None")
             absolute_gap = 0
             start_index = self.get_index_by_datetime(
-                get_analysis_start_datetime(self.today).shift(minutes=5),
+                get_analysis_start_datetime(self.today).shift(
+                    minutes=5
+                ),  # TODO maybe change this
                 tick_size=5,
             )
 
@@ -319,11 +331,9 @@ def strategy_factory(
                     f"Not trading {data_manager.symbol} because of absolute gap", "info"
                 )
                 return False
-            # if (data_manager.adx[0] < 25):
-            #     log_important(
-            #         f"Not trading {data_manager.symbol} because of ADX {data_manager.adx[0]}", "info"
-            #     )
-            #     return False
+            log_important(
+                f"ADX for {data_manager.symbol}: {data_manager.adx[0]}", "info"
+            )
 
             data_manager.absolute_gap = abs(data_manager.close_gap) / absolute_gap
             return True
@@ -452,6 +462,11 @@ def strategy_factory(
                     data_manager.score = (
                         abs(self.get_close_gap_percentage(data_manager, curr_datetime))
                         * data_manager.absolute_gap
+                        * interpolate_volume(
+                            data_manager.average_volume,
+                            10000,
+                            int(self.get_cash() // 2),
+                        )
                         * 100
                     )
 
@@ -468,6 +483,11 @@ def strategy_factory(
                     data_manager.score = (
                         abs(self.get_close_gap_percentage(data_manager, curr_datetime))
                         * data_manager.absolute_gap
+                        * interpolate_volume(
+                            data_manager.average_volume,
+                            10000,
+                            int(self.get_cash() // 2),
+                        )
                         * 100
                     )
                     log_important(
