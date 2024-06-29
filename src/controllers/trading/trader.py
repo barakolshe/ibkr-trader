@@ -96,10 +96,9 @@ class Trader:
         evaluations: list[Evaluation],
     ) -> None:
         cash: float = 40000
-        min_date = min(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
+        # min_date = min(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
+        min_date = arrow.get(evaluations[0].timestamp).replace(month=6, day=1)
         max_date = max(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
-        min_date.replace(hour=0, minute=0, second=0)
-        max_date.replace(hour=0, minute=0, second=0)
 
         logger.info(f"{min_date}  -   {max_date}")
 
