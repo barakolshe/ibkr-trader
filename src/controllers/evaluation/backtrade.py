@@ -28,7 +28,7 @@ def get_datetime(date_string: str) -> Optional[datetime]:
     return article_date
 
 
-def get_evaluations(delay: int) -> list[Evaluation]:
+def get_evaluations() -> list[Evaluation]:
     logger.info("Getting evaluations")
     evaluations: list[Evaluation] = []
     data: Any = None

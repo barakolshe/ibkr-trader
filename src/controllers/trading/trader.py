@@ -1,95 +1,44 @@
 from datetime import timedelta, datetime
-from queue import Queue
 from random import randint
-from threading import Thread, Event
-import time
-from typing import Any, Optional
+from sre_constants import LITERAL
+from typing import Literal, Optional
 import arrow
 import backtrader as bt
-from pandas import DataFrame
-from pydantic import ConfigDict, BaseModel
-from atreyu_backtrader_api import IBData
 
-from atreyu_backtrader_api import IBStore, IBData
+from atreyu_backtrader_api import IBStore
 from controllers.trading.commision import IBKRCommission  # type: ignore
 from controllers.trading.fetchers.wrapper import get_historical_data
-from controllers.trading.mock_broker import MockBroker
 from controllers.trading.strategy import strategy_factory
 from models.evaluation import Evaluation
-from models.trading import Stock
 from logger.logger import logger, log_important
 
 
-class StrategyManager(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+class BaseTrader:
+    store: Optional[IBStore] = None
+    cerebro: Optional[bt.Cerebro] = None
 
-    strategy: Any
-    thread: Thread
-    divisor_queue: Queue[int]
-    in_position_event: Event
-    test_next_tick_queue: Queue[tuple[Queue[Any], datetime]]
+    def get_strategy_type(self) -> Literal["TEST", "REAL"]:
+        raise NotImplementedError
 
-    # debugging
-    df: DataFrame
+    def create_store(self) -> None:
+        raise NotImplementedError
 
-
-class Trader:
-    server_queue: Optional[Queue[Stock]] = None
-    kill_event: Optional[Event] = None
-    mock_broker_queue: Queue[tuple[str, Any]]
-    # store: bt.stores.IBStore
-    threads: list[tuple[Thread, Any]]
-
-    def __init__(
-        self,
-        kill_event: Optional[Event] = None,
-        server_queue: Optional[Queue[Stock]] = None,
+    def add_datafeeds(
+        self, filtered_evaluations: list[Evaluation], date: datetime
     ) -> None:
-        self.server_queue = server_queue
-        self.kill_event = kill_event
-        self.threads = []
-        self.mock_broker_queue = Queue[tuple[str, Any]]()
-        mock_broker = MockBroker(self.mock_broker_queue, 40000.0)
-        mock_broker_thread = Thread(target=mock_broker.main_loop, daemon=True)
-        mock_broker_thread.start()
+        raise NotImplementedError
 
-    def get_cash(self) -> float:
-        response_queue = Queue[float]()
-        self.mock_broker_queue.put(("GET", response_queue))
-        return response_queue.get()
+    def add_commission(self) -> None:
+        raise NotImplementedError
 
-    # def main_loop(
-    #     self, target_profit: Decimal, stop_loss: Decimal, max_time: int
-    # ) -> None:
-    #     while True:
-    #         if not self.server_queue:
-    #             raise Exception("Trade queue is None")
-    #         try:
-    #             stock = self.server_queue.get(timeout=10)
-    #         except Exception as e:
-    #             if self.kill_event.is_set():
-    #                 self.stop_strategies()
-    #                 self.store.conn.disconnect()
-    #                 return
-    #             continue
+    def add_filler(self) -> None:
+        raise NotImplementedError
 
-    #         # Filtering existing stocks that already have strategies
-    #         existing_symbols: list[str] = [
-    #             strategy.symbol for strategy in existing_strategies
-    #         ]
-    #         if stock.symbol in existing_symbols:
-    #             continue
+    def add_broker(self, cash: float) -> None:
+        raise NotImplementedError
 
-    #         try:
-    #             self.create_strategy_ibkr(
-    #                 stock.symbol,
-    #                 stock.article.datetime,
-    #                 target_profit,
-    #                 stop_loss,
-    #                 max_time,
-    #             )
-    #         except BadDataFeedException:
-    #             continue
+    def wrap_up(self) -> None:
+        raise NotImplementedError
 
     def test_strategy(
         self,
@@ -106,10 +55,13 @@ class Trader:
             min_date.datetime + timedelta(days=delta)
             for delta in range((max_date.datetime - min_date.datetime).days + 1)
         ]
+
+        self.create_store()
+
         waiting_stocks = []
         for date in date_range:
-            cerebro = bt.Cerebro()
-            cerebro.broker.setcash(cash)
+            self.cerebro = bt.Cerebro()
+            self.add_broker(cash)
             filtered_evaluations = [
                 evaluation
                 for evaluation in evaluations
@@ -122,42 +74,124 @@ class Trader:
             waiting_stocks = []
             if len(filtered_evaluations) == 0:
                 continue
-            for evaluation in filtered_evaluations:
-                data1 = get_historical_data(evaluation, 1)
-                data3 = get_historical_data(evaluation, 3)
-                data5 = get_historical_data(evaluation, 5)
-                if data1 is None or data3 is None or data5 is None:
-                    continue
-                dataframe1 = bt.feeds.PandasData(dataname=data1)
-                dataframe3 = bt.feeds.PandasData(dataname=data3)
-                dataframe5 = bt.feeds.PandasData(dataname=data5)
-                log_important(
-                    f"Adding data for {evaluation.symbol} {date.date()}", "info"
-                )
-                cerebro.adddata(dataframe1)
-                cerebro.adddata(dataframe3)
-                cerebro.adddata(dataframe5)
-            is_working_event: Event = Event()
-            comminfo = IBKRCommission()  # 0.5%
-            cerebro.broker.addcommissioninfo(comminfo)
-            cerebro.broker.set_filler(bt.broker.filler.FixedSize())
+            self.add_datafeeds(filtered_evaluations, date)
+            self.add_commission()
             strategy = strategy_factory(
                 [evaluation.symbol for evaluation in filtered_evaluations],
                 arrow.get(date).datetime,
-                is_working_event,
-                "TEST",
-                _mock_broker_queue=self.mock_broker_queue,
+                self.get_strategy_type(),
             )
-            cerebro.addstrategy(strategy)
+            self.cerebro.addstrategy(strategy)
 
-            cerebro.run()
+            self.cerebro.run()
 
-            IBStore.destroy()
-            self.store = None
-            cash = cerebro.broker.getcash()
+            cash = self.cerebro.broker.getcash()
             log_important(f"cash: {cash}", "info")
 
-    def stop_strategies(self) -> None:
-        for thread, strategy in self.threads:
-            strategy.stop_run()
-            thread.join()
+
+class TestTrader(BaseTrader):
+    def get_strategy_type(self) -> Literal["TEST"]:
+        return "TEST"
+
+    def create_store(self) -> None:
+        pass
+
+    def add_datafeeds(
+        self, filtered_evaluations: list[Evaluation], date: datetime
+    ) -> None:
+        if not self.cerebro:
+            raise ValueError("Cerebro not initialized")
+        for evaluation in filtered_evaluations:
+            data1 = get_historical_data(evaluation, 1)
+            data3 = get_historical_data(evaluation, 3)
+            data5 = get_historical_data(evaluation, 5)
+            if data1 is None or data3 is None or data5 is None:
+                continue
+            dataframe1 = bt.feeds.PandasData(dataname=data1)
+            dataframe3 = bt.feeds.PandasData(dataname=data3)
+            dataframe5 = bt.feeds.PandasData(dataname=data5)
+            log_important(
+                f"Adding data for {evaluation.symbol} {arrow.get(date).format('YYYY-MM-DD')}",
+                "info",
+            )
+            self.cerebro.adddata(dataframe1)
+            self.cerebro.adddata(dataframe3)
+            self.cerebro.adddata(dataframe5)
+
+    def add_commission(self) -> None:
+        if not self.cerebro:
+            raise ValueError("Cerebro not initialized")
+        comminfo = IBKRCommission()  # 0.5%
+        self.cerebro.broker.addcommissioninfo(comminfo)
+
+    def add_filler(self) -> None:
+        if not self.cerebro:
+            raise ValueError("Cerebro not initialized")
+        self.cerebro.broker.set_filler(bt.broker.filler.FixedSize())
+
+    def add_broker(self, cash: float) -> None:
+        if not self.cerebro:
+            raise ValueError("Cerebro not initialized")
+        self.cerebro.broker.setcash(cash)
+
+    def wrap_up(self) -> None:
+        pass
+
+
+class LiveTrader(BaseTrader):
+    def get_strategy_type(self) -> Literal["REAL"]:
+        return "REAL"
+
+    def create_store(self) -> None:
+        self.store = IBStore(host="127.0.0.1", port=4002, clientId=35, _debug=True)
+
+    def add_datafeeds(
+        self, filtered_evaluations: list[Evaluation], date: datetime
+    ) -> None:
+        if not self.store or not self.cerebro:
+            raise ValueError("Store or Cerebro not initialized")
+        for evaluation in filtered_evaluations:
+            data = self.store.getdata(
+                name=evaluation.symbol,  # Data name
+                dataname=evaluation.symbol,  # Symbol name
+                secType="STK",  # SecurityType is STOCK
+                exchange="SMART",  # Trading exchange IB's SMART exchange
+                currency="USD",  # Currency of SecurityType
+                fromdate=arrow.get(
+                    arrow.get(date).shift(days=-1).date()
+                ).datetime.replace(tzinfo=None),
+                todate=arrow.get(arrow.get(date).shift(days=1).date()).datetime.replace(
+                    tzinfo=None
+                ),
+                what="TRADES",
+                timeframe=bt.TimeFrame.Minutes,
+                historical=True,
+                rtbar=True,
+            )
+            self.cerebro.adddata(data)
+            self.cerebro.resampledata(
+                data, timeframe=bt.TimeFrame.Minutes, compression=3
+            )
+            self.cerebro.resampledata(
+                data, timeframe=bt.TimeFrame.Minutes, compression=5
+            )
+            log_important(
+                f"Adding data for {evaluation.symbol} {arrow.get(date).format('YYYY-MM-DD')}",
+                "info",
+            )
+
+    def add_commission(self) -> None:
+        pass
+
+    def add_filler(self) -> None:
+        pass
+
+    def add_broker(self, cash: float) -> None:
+        if not self.store or not self.cerebro:
+            raise ValueError("Store or Cerebro not initialized")
+        self.cerebro.setbroker(self.store.getbroker())
+
+    def wrap_up(self) -> None:
+        if not self.store:
+            raise ValueError("Store not initialized")
+        self.store.getbroker().stop()

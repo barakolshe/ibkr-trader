@@ -27,14 +27,14 @@ from logger.logger import logger, log_important
 
 
 def interpolate_volume(
-    volume: float, min_volume: int = 10000, max_volume: int = 20000
+    volume: float, min_volume: int = 10000, max_volume: int = 40000
 ) -> float:
     if volume <= min_volume:
-        return 0.5
+        return 0
     elif volume >= max_volume:
         return 1
     else:
-        return 0.5 + (1 - 0.5) * (volume - min_volume) / (max_volume - min_volume)
+        return (volume - min_volume) / (max_volume - min_volume)
 
 
 class DataManager(BaseModel):
@@ -65,17 +65,13 @@ class DataManager(BaseModel):
 def strategy_factory(
     symbols: list[str],
     _today: datetime,
-    _working_signal: threading.Event,
     type: Literal["REAL", "TEST"],
-    _mock_broker_queue: Optional[Queue[tuple[str, Any]]] = None,
 ) -> bt.Strategy:
 
     class BaseStrategy(bt.Strategy):  # type: ignore
         today: datetime = _today
 
         data_ready: bool = False
-        did_signal_working: bool = False
-        working_signal: threading.Event = _working_signal
         data_managers: list[DataManager] = []
 
         def __init__(self) -> None:
@@ -167,11 +163,29 @@ def strategy_factory(
             print(f"Stopping run {self.get_curr_datetime()}")
             self.env.runstop()
 
-        def buy_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
-            raise NotImplementedError()
+        def buy_custom(
+            self, parent: Optional[bt.Order] = None, **kwargs: Any
+        ) -> bt.Order:
+            return self.buy(
+                parentId=(
+                    parent.orderId
+                    if parent is not None and hasattr(parent, "orderId")
+                    else None
+                ),
+                **kwargs,
+            )
 
-        def sell_custom(self, parent: bt.Order = None, **kwargs: Any) -> bt.Order:
-            raise NotImplementedError()
+        def sell_custom(
+            self, parent: Optional[bt.Order] = None, **kwargs: Any
+        ) -> bt.Order:
+            return self.sell(
+                parentId=(
+                    parent.orderId
+                    if parent is not None and hasattr(parent, "orderId")
+                    else None
+                ),
+                **kwargs,
+            )
 
         def get_index_by_datetime(
             self, datetime: arrow.Arrow, tick_size: int = 1
@@ -198,7 +212,9 @@ def strategy_factory(
             if order_type == "long":
                 main = self.buy_custom(
                     data=data,
-                    price=self.get_price(price) * 1.005,
+                    price=min(
+                        self.get_price(price * 1.0005), self.get_price(price + 0.1)
+                    ),
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
@@ -228,7 +244,9 @@ def strategy_factory(
             else:
                 main = self.sell_custom(
                     data=data,
-                    price=price * 0.995,
+                    price=max(
+                        self.get_price(price * 0.9995), self.get_price(price - 0.1)
+                    ),
                     size=size,
                     exectype=bt.Order.Limit,
                     transmit=False,
@@ -497,7 +515,8 @@ def strategy_factory(
         def enter_position(self) -> None:
             for data_manager in self.data_managers:
                 if (
-                    data_manager.data1.datetime.datetime(0) != self.datetime.datetime(0)
+                    arrow.get(data_manager.data1.datetime.datetime(0)).to(TIMEZONE)
+                    != self.get_curr_datetime()
                     or data_manager.is_in_position
                 ):
                     data_manager.is_in_position = True
@@ -653,7 +672,7 @@ def strategy_factory(
             #     self.check_rsi()
 
         def get_size(
-            self, price: Decimal, average_volume: int, cash: float, divider: int
+            self, price: float, average_volume: int, cash: float, divider: int
         ) -> int:
             raise NotImplementedError()
 
@@ -661,38 +680,19 @@ def strategy_factory(
 
         class TestStrategy(BaseStrategy):
 
-            def buy_custom(
-                self, parent: Optional[bt.Order] = None, **kwargs: Any
-            ) -> bt.Order:
-                return self.buy(
-                    parent=parent,
-                    **kwargs,
-                )
+            def should_start_trading(self, curr_datetime: datetime) -> bool:
+                return True
 
-            def sell_custom(
-                self, parent: Optional[bt.Order] = None, **kwargs: Any
-            ) -> bt.Order:
-                return self.sell(
-                    parent=parent,
-                    **kwargs,
+            def get_size(
+                self, price: float, average_volume: int, cash: float, divider: int
+            ) -> int:
+                return min(
+                    average_volume // 2,
+                    int(min(self.get_cash(), 5000) // float(price) // divider),
                 )
 
             def get_price(self, price: float) -> float:
-                return price
-
-            def set_cash(self, cash: float) -> None:
-                if _mock_broker_queue is None:
-                    raise Exception("Using test wrong")
-                _mock_broker_queue.put(("SET", cash))
-
-            def get_size(
-                self, price: Decimal, average_volume: int, cash: float, divider: int
-            ) -> int:
-                size = min(
-                    average_volume // 2,
-                    int(D(cash * 0.99) // D(price) // divider),
-                )
-                return size
+                return float(D(price, precision=D("0.05")))
 
         return TestStrategy
 
@@ -727,11 +727,11 @@ def strategy_factory(
                 return self.data_ready
 
             def get_size(
-                self, price: Decimal, average_volume: int, cash: float, divider: int
+                self, price: float, average_volume: int, cash: float, divider: int
             ) -> int:
                 return min(
                     average_volume // 2,
-                    int(D(min(self.get_cash(), 5000)) // price // divider),
+                    int(min(self.get_cash(), 5000) // float(price) // divider),
                 )
 
             def get_price(self, price: float) -> float:
