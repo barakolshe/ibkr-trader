@@ -699,30 +699,6 @@ def strategy_factory(
     if type == "REAL":
 
         class RealStrategy(BaseStrategy):
-            def buy_custom(
-                self, parent: Optional[bt.Order] = None, **kwargs: Any
-            ) -> bt.Order:
-                return self.buy(
-                    parentId=(
-                        parent.orderId
-                        if parent is not None and hasattr(parent, "orderId")
-                        else None
-                    ),
-                    **kwargs,
-                )
-
-            def sell_custom(
-                self, parent: Optional[bt.Order] = None, **kwargs: Any
-            ) -> bt.Order:
-                return self.sell(
-                    parentId=(
-                        parent.orderId
-                        if parent is not None and hasattr(parent, "orderId")
-                        else None
-                    ),
-                    **kwargs,
-                )
-
             def should_start_trading(self, curr_datetime: datetime) -> bool:
                 return self.data_ready
 
