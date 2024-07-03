@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 import arrow
 import backtrader as bt
 from numpy import average
+import pandas as pd
 from pydantic import BaseModel, ConfigDict
+import ta
 
-from consts.time_consts import TIMEZONE
 from consts.trading_consts import (
     CHECK_PEAKS,
     CHOSEN_STOCKS_AMOUNT,
@@ -18,8 +19,6 @@ from consts.trading_consts import (
     get_start_datetime,
     get_volume_analysis_start_datetime,
 )
-from controllers.trading.indicators.adx import ADX  # type: ignore
-from controllers.trading.indicators.rsi import CustomRSI  # type: ignore
 from utils.math_utils import D
 from logger.logger import logger, log_important
 
@@ -27,7 +26,7 @@ from logger.logger import logger, log_important
 class StrategyType(Enum):
     TEST = "TEST"
     PAPER = "PAPER"
-    REAL = "LIVE"
+    LIVE = "LIVE"
 
 
 def interpolate_volume(
@@ -52,8 +51,6 @@ class DataManager(BaseModel):
     data1: Any
     data3: Any
     data5: Any
-    # rsi: Any
-    adx: Any
     symbol: Optional[str] = None
     score: Optional[float] = 0
     close_gap: Optional[float] = 0
@@ -92,7 +89,6 @@ def strategy_factory(
                         data3=self.datas[index + 1],
                         data5=self.datas[index + 2],
                         symbol=symbols[index // 3],
-                        adx=ADX(self.datas[index + 1]),
                     )
                 )
 
@@ -107,7 +103,7 @@ def strategy_factory(
                 self.data_ready = True
 
         def get_price(self, price: float) -> float:
-            return float(D(price, precision=D("0.05")))
+            raise NotImplementedError()
 
         def get_price_with_deviation(
             self, price: float, order_type: OrderType
@@ -115,7 +111,7 @@ def strategy_factory(
             raise NotImplementedError()
 
         def notify_order(self, order: bt.Order) -> None:
-            curr_datetime = arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE)
+            curr_datetime = self.get_curr_datetime()
             target_data_manager: Optional[DataManager] = None
             for data_manager in self.data_managers:
                 if order in [
@@ -177,31 +173,16 @@ def strategy_factory(
         def buy_custom(
             self, parent: Optional[bt.Order] = None, **kwargs: Any
         ) -> bt.Order:
-            return self.buy(
-                parentId=(
-                    parent.orderId
-                    if parent is not None and hasattr(parent, "orderId")
-                    else None
-                ),
-                **kwargs,
-            )
+            raise NotImplementedError()
 
         def sell_custom(
             self, parent: Optional[bt.Order] = None, **kwargs: Any
         ) -> bt.Order:
-            return self.sell(
-                parentId=(
-                    parent.orderId
-                    if parent is not None and hasattr(parent, "orderId")
-                    else None
-                ),
-                **kwargs,
-            )
+            raise NotImplementedError()
 
-        def get_index_by_datetime(
-            self, datetime: arrow.Arrow, tick_size: int = 1
-        ) -> int:
+        def get_index_by_datetime(self, datetime: datetime, tick_size: int = 1) -> int:
             curr_datetime = self.get_curr_datetime()
+            datetime = datetime.replace(tzinfo=None)
             return 0 - int((curr_datetime - datetime).seconds // (60 * tick_size))
 
         def get_index_by_timedelta(
@@ -281,14 +262,14 @@ def strategy_factory(
 
             return main, limit_price, stop_price
 
-        def get_close_gap_percentage(
-            self, data_manager: DataManager, curr_datetime: arrow.Arrow
-        ) -> float:
+        def get_close_gap_percentage(self, data_manager: DataManager) -> float:
             close_gap: float = (
                 data_manager.data1.close[0]
                 / data_manager.data1.open[
                     self.get_index_by_datetime(
-                        get_analysis_start_datetime(self.today),
+                        get_analysis_start_datetime(self.today).datetime.replace(
+                            tzinfo=None
+                        ),
                     )
                 ]
             ) - 1
@@ -301,7 +282,7 @@ def strategy_factory(
                 data_manager.data1.close[0]
                 - data_manager.data1.open[
                     self.get_index_by_datetime(
-                        datetime,
+                        datetime.datetime.replace(tzinfo=None),
                     )
                 ]
             )
@@ -313,7 +294,9 @@ def strategy_factory(
                     data_manager.data1.volume.get(
                         size=abs(
                             self.get_index_by_datetime(
-                                get_volume_analysis_start_datetime(self.today),
+                                get_volume_analysis_start_datetime(
+                                    self.today
+                                ).datetime.replace(tzinfo=None),
                             )
                         )
                     )
@@ -322,7 +305,9 @@ def strategy_factory(
                     data_manager.data1.open.get(
                         size=abs(
                             self.get_index_by_datetime(
-                                get_volume_analysis_start_datetime(self.today),
+                                get_volume_analysis_start_datetime(
+                                    self.today
+                                ).datetime.replace(tzinfo=None),
                             )
                         )
                     )
@@ -338,9 +323,9 @@ def strategy_factory(
                 raise Exception("Close gap is None")
             absolute_gap = 0
             start_index = self.get_index_by_datetime(
-                get_analysis_start_datetime(self.today).shift(
-                    minutes=5
-                ),  # TODO maybe change this
+                get_analysis_start_datetime(self.today)
+                .shift(minutes=5)
+                .datetime.replace(tzinfo=None),  # TODO maybe change this
                 tick_size=5,
             )
 
@@ -356,15 +341,22 @@ def strategy_factory(
                     f"Not trading {data_manager.symbol} because of absolute gap", "info"
                 )
                 return False
-            log_important(
-                f"ADX for {data_manager.symbol}: {data_manager.adx[0]}", "info"
+            adx = ta.trend.ADXIndicator(
+                high=pd.Series(data_manager.data3.high.get(size=28)),
+                low=pd.Series(data_manager.data3.low.get(size=28)),
+                close=pd.Series(data_manager.data3.close.get(size=28)),
+                window=14,
             )
+            curr_adx = adx.adx().iloc[-1]
+            log_important(f"ADX for {data_manager.symbol}: {curr_adx}", "info")
 
             data_manager.absolute_gap = abs(data_manager.close_gap) / absolute_gap
             return True
 
-        def get_curr_datetime(self) -> arrow.Arrow:
-            return arrow.get(self.data.datetime.datetime(0)).to(TIMEZONE)
+        def get_curr_datetime(self) -> datetime:
+            return arrow.get(self.data.datetime.datetime(0)).datetime.replace(
+                tzinfo=None
+            )
 
         def make_end_market_order(self, data_manager: DataManager) -> None:
             if (
@@ -373,26 +365,26 @@ def strategy_factory(
                 or data_manager.stop_price_order is None
             ):
                 raise Exception("Initial order is None")
+            data_manager.limit_price_order.cancel()
+            data_manager.stop_price_order.cancel()
             if data_manager.initial_order.isbuy():
                 data_manager.market_order = self.sell_custom(
                     data=data_manager.data1,
-                    size=data_manager.initial_order.size,
+                    size=abs(self.getposition(data_manager.data1).size),
                     exectype=bt.Order.Limit,
                     price=self.get_price_with_deviation(
-                        self.data1.close[0], OrderType.SHORT
+                        data_manager.data1.close[0], OrderType.SHORT
                     ),
                 )
             else:
                 data_manager.market_order = self.buy_custom(
                     data=data_manager.data1,
-                    size=data_manager.initial_order.size,
+                    size=abs(self.getposition(data_manager.data1).size),
                     exectype=bt.Order.Limit,
                     price=self.get_price_with_deviation(
-                        self.data1.close[0], OrderType.SHORT
+                        data_manager.data1.close[0], OrderType.SHORT
                     ),
                 )
-            data_manager.limit_price_order.cancel()
-            data_manager.stop_price_order.cancel()
 
         def check_end_position(self) -> None:
             for data_manager in self.data_managers:
@@ -444,7 +436,7 @@ def strategy_factory(
                     if data_manager.absolute_gap is None:
                         raise Exception("Absolute gap is None")
                     data_manager.score = (
-                        abs(self.get_close_gap_percentage(data_manager, curr_datetime))
+                        abs(self.get_close_gap_percentage(data_manager))
                         * data_manager.absolute_gap
                         * interpolate_volume(
                             data_manager.average_volume,
@@ -465,7 +457,7 @@ def strategy_factory(
                     if data_manager.absolute_gap is None:
                         raise Exception("Absolute gap is None")
                     data_manager.score = (
-                        abs(self.get_close_gap_percentage(data_manager, curr_datetime))
+                        abs(self.get_close_gap_percentage(data_manager))
                         * data_manager.absolute_gap
                         * interpolate_volume(
                             data_manager.average_volume,
@@ -481,8 +473,7 @@ def strategy_factory(
         def enter_position(self) -> None:
             for data_manager in self.data_managers:
                 if (
-                    arrow.get(data_manager.data1.datetime.datetime(0)).to(TIMEZONE)
-                    != self.get_curr_datetime()
+                    data_manager.data1.datetime.datetime(0) != self.get_curr_datetime()
                     or data_manager.is_in_position
                 ):
                     data_manager.is_in_position = True
@@ -617,14 +608,20 @@ def strategy_factory(
             curr_datetime = self.get_curr_datetime()
 
             if (
-                get_start_datetime(self.today).shift(minutes=-1)
+                get_start_datetime(self.today)
+                .shift(minutes=-1)
+                .datetime.replace(tzinfo=None)
                 <= curr_datetime
-                < get_start_datetime(self.today).shift(minutes=30)
+                < get_start_datetime(self.today)
+                .shift(minutes=30)
+                .datetime.replace(tzinfo=None)
                 and self.data1.close[0] > 1
             ):
                 self.enter_position()
             # Checking if time is up for the day
-            if curr_datetime >= get_end_datetime(self.today):
+            if curr_datetime >= get_end_datetime(self.today).datetime.replace(
+                tzinfo=None
+            ):
                 self.check_end_position()
                 return
 
@@ -639,52 +636,112 @@ def strategy_factory(
     if type == StrategyType.TEST:
 
         class TestStrategy(BaseStrategy):
+            def buy_custom(
+                self, parent: Optional[bt.Order] = None, **kwargs: Any
+            ) -> bt.Order:
+                return self.buy(
+                    parent=parent,
+                    **kwargs,
+                )
+
+            def sell_custom(
+                self, parent: Optional[bt.Order] = None, **kwargs: Any
+            ) -> bt.Order:
+                return self.sell(
+                    parent=parent,
+                    **kwargs,
+                )
+
+            def get_price(self, price: float) -> float:
+                return price
 
             def get_price_with_deviation(
-                self,
-                price: float,
-                order_type: OrderType,
+                self, price: float, order_type: OrderType
             ) -> float:
                 if order_type == OrderType.LONG:
-                    return float(D(price * 1.005, precision=D("0.05")))
+                    return price * 1.005
                 else:
-                    return float(D(price * 0.995, precision=D("0.05")))
-
-            def should_start_trading(self, curr_datetime: datetime) -> bool:
-                return True
+                    return price * 0.995
 
             def get_size(
                 self, price: float, average_volume: int, cash: float, divider: int
             ) -> int:
-                return min(
+                size = min(
                     average_volume // 2,
-                    int(self.get_cash() - (1000000 - 40000) // float(price) // divider),
+                    int(cash * 0.99 // price // divider),
                 )
+                return size
 
         return TestStrategy
 
-    if type == StrategyType.REAL:
+    class IBKRStrategy(BaseStrategy):
+        def should_start_trading(self, curr_datetime: datetime) -> bool:
+            return self.data_ready
 
-        class RealStrategy(BaseStrategy):
-            def get_price_with_deviation(
-                self,
-                price: float,
-                order_type: OrderType,
-            ) -> float:
-                if order_type == OrderType.LONG:
-                    return float(D(price * 1.0005, precision=D("0.05")))
-                else:
-                    return float(D(price * 0.9995, precision=D("0.05")))
+        def get_price(self, price: float) -> float:
+            return float(D(price, precision=D("0.05")))
 
-            def should_start_trading(self, curr_datetime: datetime) -> bool:
-                return self.data_ready
+        def get_price_with_deviation(
+            self,
+            price: float,
+            order_type: OrderType,
+        ) -> float:
+            if order_type == OrderType.LONG:
+                return float(D(price * 1.0005, precision=D("0.05")))
+            else:
+                return float(D(price * 0.9995, precision=D("0.05")))
 
+        def buy_custom(
+            self, parent: Optional[bt.Order] = None, **kwargs: Any
+        ) -> bt.Order:
+            return self.buy(
+                parentId=(
+                    parent.orderId
+                    if parent is not None and hasattr(parent, "orderId")
+                    else None
+                ),
+                **kwargs,
+            )
+
+        def sell_custom(
+            self, parent: Optional[bt.Order] = None, **kwargs: Any
+        ) -> bt.Order:
+            return self.sell(
+                parentId=(
+                    parent.orderId
+                    if parent is not None and hasattr(parent, "orderId")
+                    else None
+                ),
+                **kwargs,
+            )
+
+        def get_size(
+            self, price: float, average_volume: int, cash: float, divider: int
+        ) -> int:
+            raise NotImplementedError()
+
+    if type == StrategyType.PAPER:
+
+        class PaperStrategy(IBKRStrategy):
             def get_size(
                 self, price: float, average_volume: int, cash: float, divider: int
             ) -> int:
                 return min(
                     average_volume // 2,
-                    int(min(self.get_cash(), 5000) // float(price) // divider),
+                    int(cash - (1000000 - 40000) // float(price) // divider),
+                )
+
+        return PaperStrategy
+
+    if type == StrategyType.LIVE:
+
+        class RealStrategy(IBKRStrategy):
+            def get_size(
+                self, price: float, average_volume: int, cash: float, divider: int
+            ) -> int:
+                return min(
+                    average_volume // 2,
+                    int(min(cash, 5000) // float(price) // divider),
                 )
 
         return RealStrategy

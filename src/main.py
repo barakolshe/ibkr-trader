@@ -3,7 +3,7 @@ from typing import Optional
 from controllers.evaluation.backtrade import (
     get_evaluations,
 )
-from controllers.trading.trader import BaseTrader, LiveTrader, TestTrader
+from controllers.trading.trader import BaseTrader, TestTrader, PaperTrader, LiveTrader
 
 
 def trade_with_backtrader() -> None:
@@ -12,10 +12,15 @@ def trade_with_backtrader() -> None:
     target_evaluations = [evaluation for evaluation in evaluations]
 
     trader: Optional[BaseTrader] = None
-    if os.environ.get("LIVE") == "True":
+    mode = os.environ.get("MODE")
+    if mode == "TEST":
+        trader = TestTrader()
+    elif mode == "PAPER":
+        trader = PaperTrader()
+    elif mode == "LIVE":
         trader = LiveTrader()
     else:
-        trader = TestTrader()
+        raise Exception("No mode was chosen")
 
     if not trader:
         raise Exception("No trader was chosen")
