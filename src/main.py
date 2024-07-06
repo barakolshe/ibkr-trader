@@ -3,7 +3,7 @@ from typing import Optional
 from controllers.evaluation.backtrade import (
     get_evaluations,
 )
-from controllers.trading.new_strategy import NewTrader
+from controllers.trading.new_strategy import BaseNewTrader
 from controllers.trading.trader import BaseTrader
 
 

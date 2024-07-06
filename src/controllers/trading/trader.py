@@ -1,16 +1,10 @@
 from datetime import timedelta, datetime
-from random import randint
-from sre_constants import LITERAL
-from typing import Any, Literal, Optional
 import arrow
 import backtrader as bt
 
 from atreyu_backtrader_api import IBStore
-from pandas import DataFrame
-import pandas as pd
 from controllers.trading.commision import IBKRCommission  # type: ignore
-from controllers.trading.fetchers.wrapper import get_historical_data
-from controllers.trading.new_strategy import NewTrader
+from controllers.trading.new_strategy import BaseNewTrader, TestNewTrader
 from models.evaluation import Evaluation
 from logger.logger import logger, log_important
 
@@ -62,7 +56,7 @@ class BaseTrader:
         self,
         evaluations: list[Evaluation],
     ) -> None:
-        cash = 40000
+        cash: float = 40000
         # min_date = min(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
         min_date = arrow.get(evaluations[0].timestamp).replace(month=6, day=1)
         max_date = max(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
@@ -89,10 +83,12 @@ class BaseTrader:
             waiting_stocks = []
             if len(filtered_evaluations) == 0:
                 continue
-            trader = NewTrader(date, is_testing=True)
+            trader = TestNewTrader(date, is_testing=True, initial_cash=cash)
             trader.main_loop(filtered_evaluations)
+            filtered_evaluations = []
+            cash = trader.cash
 
-            log_important(f"cash: {cash}", "info")
+            log_important(f"cash: {trader.cash}", "info")
 
 
 class TestTrader(BaseTrader):

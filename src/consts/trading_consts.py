@@ -18,7 +18,7 @@ def get_end_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
     return arrow.get(date).replace(hour=15, minute=0, second=0)
 
 
-STOP_LOSS = 0.015
+STOP_LOSS = 0.02
 TARGET_PROFIT = 0.04
 
 CLOSE_GAP_MULTIPLIER_THRESHOLD = 5
@@ -28,5 +28,7 @@ CHOSEN_STOCKS_AMOUNT = 2
 SHOULD_USE_RSI = False
 
 CHECK_PEAKS = True
+
+PEAK_PRICE_THRESHOLD = 0.25
 
 # enter_trade_datetime = datetime()

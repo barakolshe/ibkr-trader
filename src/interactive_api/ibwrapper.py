@@ -26,7 +26,9 @@ class IBWrapper:
         self,
         evaluation: Evaluation,
     ) -> Queue[Any]:
-        logger.info(f"Getting historical data for evaluation: {evaluation}")
+        logger.info(
+            f"Getting historical data for: {evaluation.symbol} {evaluation.timestamp.date()}"
+        )
         contract = self.get_contract(evaluation.symbol)
 
         endDate = f"{arrow.get(evaluation.timestamp, TIMEZONE).replace(hour=16, minute=0, second=0).format(DATETIME_FORMATTING)} {TIMEZONE}"
@@ -44,7 +46,7 @@ class IBWrapper:
 
         return queue
 
-    def get_account_usd_blocking(self, response_queue: Queue[Any]) -> float:
+    def get_account_usd_blocking(self) -> float:
         queue = self.app.req_account_summary("All", "$LEDGER")
         usd: float = -1
         response: Any = ""
@@ -54,11 +56,10 @@ class IBWrapper:
                 break
             if response[0] == "CashBalance":
                 usd = response[1]
-                break
 
         if usd == -1:
             raise ValueError("Error getting account USD")
-        return min(float(usd), 40000)
+        return float(usd)
 
     def get_contract(
         self, symbol: str, exchange: str = "SMART", currency: str = "USD"

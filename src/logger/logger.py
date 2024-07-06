@@ -37,7 +37,7 @@ formatter = logging.Formatter(
 file_handler = RotatingFileHandler(
     LOG_FILE_PATH, maxBytes=ROTATING_FILE_MAX_SIZE, backupCount=BACKUP_COUNT
 )
-file_handler.setLevel(logging.INFO)
+file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
 
 important_file_handler = RotatingFileHandler(
@@ -47,7 +47,7 @@ important_file_handler.setLevel(logging.INFO)
 important_file_handler.setFormatter(formatter)
 
 stdout_handler = logging.StreamHandler(sys.stdout)
-stdout_handler.setLevel(logging.DEBUG)
+stdout_handler.setLevel(logging.INFO)
 stdout_handler.setFormatter(formatter)
 
 # discord_handler = DiscordHandler()

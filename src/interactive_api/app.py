@@ -19,8 +19,14 @@ from logger.logger import logger
 from utils.math_utils import D
 
 
+class OrderType(Enum):
+    BUY = "buy"
+    SELL = "sell"
+
+
 class OrderStatus(Enum):
     COMPLETED = "COMPLETED"
+    PARTIAL = "PARTIAL"
     PENDING = "PENDING"
     CANCELLED = "CANCELLED"
     SENT = "SENT"
@@ -32,13 +38,9 @@ class Order(BaseModel):
     id: int
     queue: Queue[Any]
     status: OrderStatus
+    order_type: OrderType
     price: float
     quantity: float
-
-
-class OrderType(Enum):
-    LONG = "long"
-    SHORT = "short"
 
 
 class IBapi(EWrapper, EClient):  # type: ignore
@@ -68,7 +70,6 @@ class IBapi(EWrapper, EClient):  # type: ignore
         req_id = self.nextValidOrderId
         self.nextValidOrderId += 1
         self.queues_mappings[req_id] = queue
-        logger.info(f"Requesting historical data with id {req_id}")
         self.reqHistoricalData(
             req_id,
             contract,
@@ -87,6 +88,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
     def req_account_summary(self, groupName: str, tags: str) -> Queue[Any]:
         queue = Queue[Any]()
         req_id = self.nextValidOrderId
+        self.nextValidOrderId += 1
         self.queues_mappings[req_id] = queue
         self.reqAccountSummary(req_id, groupName, tags)
 
@@ -99,7 +101,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
                 del prms["self"]
             else:
                 prms = fnParams
-            logger.info("ANSWER function: %s, parameters: %s", fnName, prms)
+            logger.debug("ANSWER function: %s, parameters: %s", fnName, prms)
 
     def error(
         self,
@@ -110,6 +112,8 @@ class IBapi(EWrapper, EClient):  # type: ignore
     ) -> None:
         """This event is called when there is an error with the
         communication or when TWS wants to send a message to the client."""
+        if reqId == -1:
+            return
         self.logAnswer(current_fn_name(), vars())
         if advancedOrderRejectJson:
             logger.error(
@@ -122,11 +126,10 @@ class IBapi(EWrapper, EClient):  # type: ignore
         else:
             logger.error("ERROR %s %s %s", reqId, errorCode, errorString)
 
-        try:
+        if reqId in self.queues_mappings:
             queue = self.queues_mappings[reqId]
             self.insert_to_queue(None, queue)
-        except KeyError:
-            pass
+            self.queues_mappings.pop(reqId)
 
     def historicalData(self, reqId: int, bar: Any) -> None:
         # self.logAnswer(current_fn_name(), vars())
@@ -168,7 +171,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
 
         limit_price_order = self.place_order(
             contract=contract,
-            action=OrderType.SHORT if action == OrderType.LONG else OrderType.LONG,
+            action=OrderType.SELL if action == OrderType.BUY else OrderType.BUY,
             orderType="LMT",
             totalQuantity=quantity,
             lmtPrice=take_profit_limit_price,
@@ -179,7 +182,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
 
         stop_loss_order = self.place_order(
             contract=contract,
-            action=OrderType.SHORT if action == OrderType.LONG else OrderType.LONG,
+            action=OrderType.SELL if action == OrderType.BUY else OrderType.BUY,
             orderType="STP LMT",
             totalQuantity=quantity,
             auxPrice=stop_loss_price,
@@ -211,7 +214,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
         else:
             order.orderId = self.nextValidOrderId
             self.nextValidOrderId += 1
-        order.action = "BUY" if action == OrderType.LONG else "SELL"
+        order.action = "BUY" if action == OrderType.BUY else "SELL"
         order.orderType = orderType
         order.totalQuantity = totalQuantity
         if auxPrice:
@@ -230,6 +233,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
             id=order.orderId,
             queue=queue,
             status=OrderStatus.SENT,
+            order_type=action,
             price=lmtPrice,
             quantity=totalQuantity,
         )
