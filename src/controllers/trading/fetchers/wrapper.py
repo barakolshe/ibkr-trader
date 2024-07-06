@@ -1,12 +1,8 @@
-from queue import Queue
-from re import S
-import time
-from typing import Any, Optional
+from typing import Optional
 import arrow
 from pandas import DataFrame
 import os
 import pandas as pd
-import requests  # type: ignore
 import requests_cache
 from datetime import datetime
 

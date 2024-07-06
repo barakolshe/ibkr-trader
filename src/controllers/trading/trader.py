@@ -10,61 +10,12 @@ from pandas import DataFrame
 import pandas as pd
 from controllers.trading.commision import IBKRCommission  # type: ignore
 from controllers.trading.fetchers.wrapper import get_historical_data
-from controllers.trading.strategy import StrategyType, strategy_factory
+from controllers.trading.new_strategy import NewTrader
 from models.evaluation import Evaluation
 from logger.logger import logger, log_important
 
 
-def datafeed_to_dataframe(datafeed: Any) -> DataFrame:
-    data_points: dict[str, list[Any]] = {
-        "datetime": [],
-        "open": [],
-        "high": [],
-        "low": [],
-        "close": [],
-        "volume": [],
-        "openinterest": [],
-    }
-
-    for line in datafeed:
-        data_points["datetime"].append(line.datetime.datetime(0))
-        data_points["open"].append(line.open[0])
-        data_points["high"].append(line.high[0])
-        data_points["low"].append(line.low[0])
-        data_points["close"].append(line.close[0])
-        data_points["volume"].append(line.volume[0])
-        data_points["openinterest"].append(line.openinterest[0])
-
-    # Convert to a Pandas DataFrame
-    df = pd.DataFrame(data_points)
-    df.set_index("datetime", inplace=True)
-
-    return df
-
-
-def dataframe_to_another_timeframe(df: DataFrame, minutes: int) -> DataFrame:
-    new_df = df.resample(f"{minutes}min").agg(
-        {
-            "open": "first",
-            "high": "max",
-            "low": "min",
-            "close": "last",
-            "volume": "sum",
-            "openinterest": "last",
-        }
-    )
-    return new_df
-
-
 class BaseTrader:
-    store: Optional[IBStore] = None
-    cerebro: Optional[bt.Cerebro] = None
-
-    def get_strategy_type(self) -> StrategyType:
-        raise NotImplementedError
-
-    def create_store(self) -> None:
-        self.store = IBStore(host="127.0.0.1", port=4002, clientId=37, _debug=True)
 
     def add_datafeeds(
         self, filtered_evaluations: list[Evaluation], date: datetime
@@ -86,12 +37,8 @@ class BaseTrader:
                 rtbar=True,
             )
 
-            self.cerebro.adddata(ib_data)
             self.cerebro.resampledata(
-                ib_data, timeframe=bt.TimeFrame.Minutes, compression=3
-            )
-            self.cerebro.resampledata(
-                ib_data, timeframe=bt.TimeFrame.Minutes, compression=5
+                ib_data, timeframe=bt.TimeFrame.Minutes, compression=1
             )
 
             log_important(
@@ -127,16 +74,9 @@ class BaseTrader:
             for delta in range((max_date.datetime - min_date.datetime).days + 1)
         ]
 
-        self.create_store()
-        if not self.store:
-            raise ValueError("Store not initialized")
         log_important(f"cash: {cash}", "info")
         waiting_stocks = []
         for date in date_range:
-            self.cerebro = bt.Cerebro()
-            self.add_broker(cash)
-            self.add_commission()
-            self.add_filler()
             filtered_evaluations = [
                 evaluation
                 for evaluation in evaluations
@@ -149,22 +89,13 @@ class BaseTrader:
             waiting_stocks = []
             if len(filtered_evaluations) == 0:
                 continue
-            self.add_datafeeds(filtered_evaluations, date)
-            strategy = strategy_factory(
-                [evaluation.symbol for evaluation in filtered_evaluations],
-                arrow.get(date).datetime.replace(tzinfo=None),
-                self.get_strategy_type(),
-            )
-            self.cerebro.addstrategy(strategy)
-            self.cerebro.run()
-            cash = self.cerebro.broker.getcash()
+            trader = NewTrader(date, is_testing=True)
+            trader.main_loop(filtered_evaluations)
 
             log_important(f"cash: {cash}", "info")
 
 
 class TestTrader(BaseTrader):
-    def get_strategy_type(self) -> StrategyType:
-        return StrategyType.TEST
 
     def add_commission(self) -> None:
         if not self.cerebro:
@@ -199,13 +130,3 @@ class IBKRTrader(BaseTrader):
         if not self.store or not self.cerebro:
             raise ValueError("Store or Cerebro not initialized")
         self.cerebro.setbroker(self.store.getbroker())
-
-
-class PaperTrader(BaseTrader):
-    def get_strategy_type(self) -> StrategyType:
-        return StrategyType.PAPER
-
-
-class LiveTrader(BaseTrader):
-    def get_strategy_type(self) -> StrategyType:
-        return StrategyType.LIVE

@@ -1,11 +1,14 @@
-from datetime import datetime, timedelta
+# type: ignore
+import datetime as dt
 from enum import Enum
 from typing import Any, Optional
 import arrow
 import backtrader as bt
 from numpy import average
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
+from pandas import DataFrame
+from pandas import Series
+from pydantic import BaseModel, ConfigDict, computed_field
 import ta
 
 from consts.trading_consts import (
@@ -21,6 +24,112 @@ from consts.trading_consts import (
 )
 from utils.math_utils import D
 from logger.logger import logger, log_important
+
+
+class SeriesAccessor:
+    series: pd.Series
+
+    def __init__(self, series: Series) -> None:
+        self.series = series
+
+    def __getitem__(self, index: int) -> Any:
+        return self.series.iloc[index - 1]
+
+    def get(self, size: int) -> DataFrame:
+        return self.series.iloc[len(self.series) - size :]
+
+
+class DatetimeAccessor:
+    datetime: pd.DatetimeIndex
+
+    def __init__(self, datetime: pd.DatetimeIndex) -> None:
+        self.datetime = datetime
+
+    def datetime(self, index: int) -> dt.datetime:
+        return self.datetime[len(self.datetime) - 1 - index]
+
+
+class DataFrameAccessor:
+    df: DataFrame
+
+    def __init__(self, df: DataFrame) -> None:
+        self.df = df
+
+    @property
+    def open(self) -> SeriesAccessor:
+        return SeriesAccessor(self.df["open"])
+
+    @property
+    def high(self) -> SeriesAccessor:
+        return SeriesAccessor(self.df["high"])
+
+    @property
+    def low(self) -> SeriesAccessor:
+        return SeriesAccessor(self.df["low"])
+
+    @property
+    def close(self) -> SeriesAccessor:
+        return SeriesAccessor(self.df["close"])
+
+    @property
+    def datetime(self) -> Any:
+        return self.df.index
+
+
+def dataframe_to_another_timeframe(df: DataFrame, minutes: int) -> DataFrame:
+    new_df = df.resample(f"{minutes}min").agg(
+        {
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+        }
+    )
+    return new_df
+
+
+def datafeed_to_dataframe(datafeed: Any) -> DataFrame:
+    data_points: dict[str, list[Any]] = {
+        "datetime": [],
+        "open": [],
+        "high": [],
+        "low": [],
+        "close": [],
+        "volume": [],
+        # "openinterest": [],
+    }
+
+    datafeed_length = 0
+    for i in range(0, 100000):
+        try:
+            datafeed.datetime.datetime(0 - i)
+            datafeed_length = i
+        except IndexError:
+            break
+
+    for i in range(0 - datafeed_length, 1):
+        data_points["datetime"].append(datafeed.datetime.datetime(i))
+        data_points["open"].append(datafeed.open[i])
+        data_points["high"].append(datafeed.high[i])
+        data_points["low"].append(datafeed.low[i])
+        data_points["close"].append(datafeed.close[i])
+        data_points["volume"].append(datafeed.volume[i])
+        # data_points["openinterest"].append(datafeed.openinterest[i])
+
+    # Convert to a Pandas DataFrame
+    df = pd.DataFrame(data_points)
+    df.set_index("datetime", inplace=True)
+
+    return df
+
+
+def change_datafeed_timeframe(datafeed: Any, minutes: int) -> Any:
+    df = datafeed_to_dataframe(datafeed)
+    new_df = dataframe_to_another_timeframe(df, minutes)
+    new_datafeed = DataFrameAccessor(new_df)
+
+    return new_datafeed
 
 
 class StrategyType(Enum):
@@ -49,8 +158,17 @@ class DataManager(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     data1: Any
-    data3: Any
-    data5: Any
+
+    @computed_field
+    @property
+    def data3(self) -> str:
+        return change_datafeed_timeframe(self.data1, 3)
+
+    @computed_field
+    @property
+    def data5(self) -> str:
+        return change_datafeed_timeframe(self.data1, 5)
+
     symbol: Optional[str] = None
     score: Optional[float] = 0
     close_gap: Optional[float] = 0
@@ -70,29 +188,27 @@ class DataManager(BaseModel):
 
 def strategy_factory(
     symbols: list[str],
-    _today: datetime,
+    _today: dt.datetime,
     type: StrategyType,
 ) -> bt.Strategy:
 
     class BaseStrategy(bt.Strategy):  # type: ignore
-        today: datetime = _today
+        today: dt.datetime = _today
 
         data_ready: bool = False
         data_managers: list[DataManager] = []
 
         def __init__(self) -> None:
             super().__init__()
-            for index in range(0, len(self.datas), 3):
+            for index in range(0, len(self.datas)):
                 self.data_managers.append(
                     DataManager(
                         data1=self.datas[index],
-                        data3=self.datas[index + 1],
-                        data5=self.datas[index + 2],
-                        symbol=symbols[index // 3],
+                        symbol=symbols[index],
                     )
                 )
 
-        def should_start_trading(self, curr_datetime: datetime) -> bool:
+        def should_start_trading(self, curr_datetime: dt.datetime) -> bool:
             raise NotImplementedError()
 
         def get_cash(self) -> float:
@@ -180,13 +296,15 @@ def strategy_factory(
         ) -> bt.Order:
             raise NotImplementedError()
 
-        def get_index_by_datetime(self, datetime: datetime, tick_size: int = 1) -> int:
+        def get_index_by_datetime(
+            self, datetime: dt.datetime, tick_size: int = 1
+        ) -> int:
             curr_datetime = self.get_curr_datetime()
             datetime = datetime.replace(tzinfo=None)
             return 0 - int((curr_datetime - datetime).seconds // (60 * tick_size))
 
         def get_index_by_timedelta(
-            self, timedelta: timedelta, tick_size: int = 1
+            self, timedelta: dt.timedelta, tick_size: int = 1
         ) -> int:
             return 0 - int(timedelta.seconds // (60 * tick_size))
 
@@ -197,8 +315,8 @@ def strategy_factory(
             price: float,
             stopprice: float,
             size: float,
-            parent_valid: timedelta | datetime,
-            children_valid: timedelta | datetime,
+            parent_valid: dt.timedelta | dt.datetime,
+            children_valid: dt.timedelta | dt.datetime,
             order_type: OrderType,
         ) -> tuple[bt.Order, bt.Order, bt.Order]:
             if order_type == OrderType.LONG:
@@ -353,7 +471,7 @@ def strategy_factory(
             data_manager.absolute_gap = abs(data_manager.close_gap) / absolute_gap
             return True
 
-        def get_curr_datetime(self) -> datetime:
+        def get_curr_datetime(self) -> dt.datetime:
             return arrow.get(self.data.datetime.datetime(0)).datetime.replace(
                 tzinfo=None
             )
@@ -365,6 +483,9 @@ def strategy_factory(
                 or data_manager.stop_price_order is None
             ):
                 raise Exception("Initial order is None")
+            logger.info(
+                f"Making end market order for {data_manager.symbol} {self.get_curr_datetime()}"
+            )
             data_manager.limit_price_order.cancel()
             data_manager.stop_price_order.cancel()
             if data_manager.initial_order.isbuy():
@@ -382,7 +503,7 @@ def strategy_factory(
                     size=abs(self.getposition(data_manager.data1).size),
                     exectype=bt.Order.Limit,
                     price=self.get_price_with_deviation(
-                        data_manager.data1.close[0], OrderType.SHORT
+                        data_manager.data1.close[0], OrderType.LONG
                     ),
                 )
 
@@ -514,8 +635,8 @@ def strategy_factory(
                         limitprice=data.close[0] * (1 + TARGET_PROFIT),
                         price=data.close[0],
                         stopprice=data.close[0] * (1 - STOP_LOSS),
-                        parent_valid=timedelta(minutes=30),
-                        children_valid=timedelta(hours=4),
+                        parent_valid=dt.timedelta(minutes=30),
+                        children_valid=dt.timedelta(hours=4),
                         order_type=OrderType.LONG,
                     )
                 else:
@@ -529,8 +650,8 @@ def strategy_factory(
                         limitprice=data.close[0] * (1 - TARGET_PROFIT),
                         price=data.close[0],
                         stopprice=data.close[0] * (1 + STOP_LOSS),
-                        parent_valid=timedelta(minutes=30),
-                        children_valid=timedelta(hours=4),
+                        parent_valid=dt.timedelta(minutes=30),
+                        children_valid=dt.timedelta(hours=4),
                         order_type=OrderType.SHORT,
                     )
 
@@ -601,6 +722,9 @@ def strategy_factory(
                         - 1
                         < 0.25 * data_manager.peak_price_gap
                     ):
+                        logger.info(
+                            f"Leaving position because of peaks {data_manager.symbol} {self.get_curr_datetime()}"
+                        )
                         self.make_end_market_order(data_manager)
                         data_manager.did_leave_position = True
 
@@ -675,7 +799,7 @@ def strategy_factory(
         return TestStrategy
 
     class IBKRStrategy(BaseStrategy):
-        def should_start_trading(self, curr_datetime: datetime) -> bool:
+        def should_start_trading(self, curr_datetime: dt.datetime) -> bool:
             return self.data_ready
 
         def get_price(self, price: float) -> float:
