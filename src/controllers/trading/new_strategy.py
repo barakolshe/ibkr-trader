@@ -31,9 +31,7 @@ from interactive_api.app import Order
 from utils.math_utils import D
 
 
-def interpolate_volume(
-    volume: float, min_volume: int = 10000, max_volume: int = 40000
-) -> float:
+def interpolate_volume(volume: float, min_volume: int, max_volume: int) -> float:
     if volume <= min_volume:
         return 0
     elif volume >= max_volume:
@@ -380,7 +378,7 @@ class BaseNewTrader:
                 exc_info=True,
             )
             data_manager.average_volume = 0
-        if data_manager.average_volume is None or data_manager.average_volume < 10000:
+        if data_manager.average_volume is None:
             data_manager.score = 0
             return
         data_manager.close_gap = self.get_close_gap_difference(
@@ -403,8 +401,8 @@ class BaseNewTrader:
                     * data_manager.absolute_gap
                     * interpolate_volume(
                         data_manager.average_volume,
-                        int(self.cash // 4),
-                        int(self.cash // 2),
+                        int(self.cash // (CHOSEN_STOCKS_AMOUNT * 2)),
+                        int(self.cash // CHOSEN_STOCKS_AMOUNT),
                     )
                     * 100
                 )
@@ -424,8 +422,8 @@ class BaseNewTrader:
                     * data_manager.absolute_gap
                     * interpolate_volume(
                         data_manager.average_volume,
-                        10000,
-                        int(self.cash // 2),
+                        int(self.cash // (CHOSEN_STOCKS_AMOUNT * 2)),
+                        int(self.cash // CHOSEN_STOCKS_AMOUNT),
                     )
                     * 100
                 )
