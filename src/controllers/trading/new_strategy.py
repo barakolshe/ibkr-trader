@@ -339,10 +339,10 @@ class BaseNewTrader:
         absolute_gap = 0
         filtered_df = data_manager.data5.loc[
             get_analysis_start_datetime(self.today).shift(minutes=5).datetime :
-        ]
+        ].copy()
 
-        close_diffs = filtered_df["close"].diff().abs()
-        absolute_gap = close_diffs.sum(skipna=True)
+        filtered_df["high_low_diff"] = filtered_df["high"] - filtered_df["low"]
+        absolute_gap = filtered_df["close"].sum(skipna=True)
 
         if absolute_gap > abs(data_manager.close_gap) * CLOSE_GAP_MULTIPLIER_THRESHOLD:
             log_important(
