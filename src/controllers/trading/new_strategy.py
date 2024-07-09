@@ -342,7 +342,7 @@ class BaseNewTrader:
         ].copy()
 
         filtered_df["high_low_diff"] = filtered_df["high"] - filtered_df["low"]
-        absolute_gap = filtered_df["close"].sum(skipna=True)
+        absolute_gap = filtered_df["high_low_diff"].sum(skipna=True)
 
         if absolute_gap > abs(data_manager.close_gap) * CLOSE_GAP_MULTIPLIER_THRESHOLD:
             log_important(
