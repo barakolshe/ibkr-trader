@@ -14,7 +14,8 @@ from ibapi.common import TickAttrib, TickerId
 from ibapi.ticktype import TickType
 from pydantic import BaseModel, ConfigDict
 
-from consts.time_consts import AWARE_DATETIME_FORMATTING
+from consts.time_consts import AWARE_DATETIME_FORMATTING, DATETIME_FORMATTING
+from consts.trading_consts import CHOSEN_STOCKS_AMOUNT
 from logger.logger import logger
 from utils.math_utils import D
 
@@ -40,15 +41,19 @@ class Order(BaseModel):
     status: OrderStatus
     order_type: OrderType
     price: float
-    quantity: float
+    quantity: int
 
 
 class IBapi(EWrapper, EClient):  # type: ignore
     queues_mappings: dict[int, Queue[Any]]
+    orders_mappings: dict[int, Order]
+
+    order_counter: int = 0
 
     def __init__(self) -> None:
         EClient.__init__(self, self)
         self.queues_mappings: dict[int, Queue[Any]] = {}
+        self.orders_mappings: dict[int, Order] = {}
         self.nextValidOrderId = 1
 
     def insert_to_queue(self, data: Any, queue: Queue[Any]) -> None:
@@ -81,6 +86,23 @@ class IBapi(EWrapper, EClient):  # type: ignore
             formatDate,
             keepUpToDate,
             chartOptions,
+        )
+
+        return queue
+
+    def req_live_data(
+        self,
+        contract: Contract,
+        whatToShow: str,
+        useRTH: int,
+        realTimeBarOptions: Any,
+    ) -> Queue[Any]:
+        queue = Queue[Any]()
+        req_id = self.nextValidOrderId
+        self.nextValidOrderId += 1
+        self.queues_mappings[req_id] = queue
+        self.reqRealTimeBars(
+            req_id, contract, 1, whatToShow, useRTH, realTimeBarOptions
         )
 
         return queue
@@ -129,7 +151,6 @@ class IBapi(EWrapper, EClient):  # type: ignore
         if reqId in self.queues_mappings:
             queue = self.queues_mappings[reqId]
             self.insert_to_queue(None, queue)
-            self.queues_mappings.pop(reqId)
 
     def historicalData(self, reqId: int, bar: Any) -> None:
         # self.logAnswer(current_fn_name(), vars())
@@ -144,12 +165,37 @@ class IBapi(EWrapper, EClient):  # type: ignore
         self.logAnswer(current_fn_name(), vars())
         queue = self.queues_mappings[reqId]
         self.insert_to_queue(None, queue)
-        self.queues_mappings.pop(reqId)
+
+    def realtimeBar(
+        self,
+        reqId: TickerId,
+        time: int,
+        open_: float,
+        high: float,
+        low: float,
+        close: float,
+        volume: Decimal,
+        wap: Decimal,
+        count: int,
+    ) -> None:
+        # self.logAnswer(current_fn_name(), vars())
+        queue = self.queues_mappings[reqId]
+        bar_dict = {
+            "date": arrow.get(time, tzinfo="US/Eastern").datetime,
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+            "wap": wap,
+            "count": count,
+        }
+        self.insert_to_queue(bar_dict, queue)
 
     def place_bracket_order(
         self,
         action: OrderType,
-        quantity: float,
+        quantity: int,
         price_limit: float,
         take_profit_limit_price: float,
         stop_loss_price: float,
@@ -199,7 +245,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
         contract: Contract,
         action: OrderType,
         orderType: str,
-        totalQuantity: float,
+        totalQuantity: int,
         lmtPrice: float,
         auxPrice: Optional[float] = None,
         parentId: Optional[int] = None,
@@ -208,6 +254,12 @@ class IBapi(EWrapper, EClient):  # type: ignore
         transmit: bool = True,
     ) -> Order:
         self.logAnswer(current_fn_name(), vars())
+
+        self.order_counter += 1
+
+        if self.order_counter > 4 * CHOSEN_STOCKS_AMOUNT * 2:
+            raise ValueError("Too many orders")
+
         order = IBOrder()
         if orderId:
             order.orderId = orderId
@@ -224,7 +276,10 @@ class IBapi(EWrapper, EClient):  # type: ignore
         if parentId:
             order.parentId = parentId
         if goodTillDate:
-            order.goodTillDate = goodTillDate.strftime(AWARE_DATETIME_FORMATTING)
+            order.goodTillDate = (
+                f"{arrow.get(goodTillDate).format(DATETIME_FORMATTING)} US/Eastern"
+            )
+            order.tif = "GTD"
         order.transmit = transmit
 
         queue = Queue[Any]()
@@ -240,6 +295,8 @@ class IBapi(EWrapper, EClient):  # type: ignore
 
         self.placeOrder(order.orderId, contract, order)
 
+        self.orders_mappings[order.orderId] = return_order
+
         return return_order
 
     def accountSummary(
@@ -253,13 +310,6 @@ class IBapi(EWrapper, EClient):  # type: ignore
         self.logAnswer(current_fn_name(), vars())
         queue = self.queues_mappings[reqId]
         self.insert_to_queue(None, queue)
-        self.queues_mappings.pop(reqId)
-
-    # def historicalDataUpdate(self, reqId, bar):
-    #     line = vars(bar)
-    #     # pop date and make it the index, add rest to df
-    #     # will overwrite last bar at that same time
-    #     self.df.loc[pd.to_datetime(line.pop("date"))] = line
 
     def tickPrice(
         self, reqId: TickerId, tickType: TickType, price: float, attrib: TickAttrib
@@ -287,20 +337,25 @@ class IBapi(EWrapper, EClient):  # type: ignore
     ) -> None:
         self.logAnswer(current_fn_name(), vars())
         queue = self.queues_mappings[orderId]
-        if status == "Filled":
-            self.insert_to_queue(
-                {
-                    "order_id": orderId,
-                    "status": status,
-                    "filled": filled,
-                    "remaining": remaining,
-                    "avgFillPrice": avgFillPrice,
-                    "permId": permId,
-                    "parentId": parentId,
-                    "lastFillPrice": lastFillPrice,
-                    "clientId": clientId,
-                    "whyHeld": whyHeld,
-                    "mktCapPrice": mktCapPrice,
-                },
-                queue,
-            )
+        order = self.orders_mappings[orderId]
+        match (status):
+            case "Filled":
+                new_order = Order(
+                    id=orderId,
+                    queue=queue,
+                    status=OrderStatus.COMPLETED,
+                    order_type=order.order_type,
+                    price=avgFillPrice,
+                    quantity=int(filled),
+                )
+                queue.put(new_order)
+            case "Cancelled":
+                new_order = Order(
+                    id=orderId,
+                    queue=queue,
+                    status=OrderStatus.CANCELLED,
+                    order_type=order.order_type,
+                    price=order.price,
+                    quantity=int(filled),
+                )
+                queue.put(new_order)

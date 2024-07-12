@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from queue import Queue
 from typing import Any, Optional
@@ -7,7 +8,6 @@ from pandas import DataFrame
 
 from consts.time_consts import (
     DATETIME_FORMATTING,
-    SECONDS_FROM_END,
     TIMEZONE,
 )
 from interactive_api.app import IBapi
@@ -22,16 +22,13 @@ class IBWrapper:
     def __init__(self, app: IBapi) -> None:
         self.app = app
 
-    def get_historical_data(
-        self,
-        evaluation: Evaluation,
-    ) -> Queue[Any]:
+    def get_historical_data(self, evaluation: Evaluation, date: datetime) -> Queue[Any]:
         logger.info(
-            f"Getting historical data for: {evaluation.symbol} {evaluation.timestamp.date()}"
+            f"Getting historical data for: {evaluation.ticker} {evaluation.timestamp.date()}"
         )
-        contract = self.get_contract(evaluation.symbol)
+        contract = self.get_contract(evaluation.ticker)
 
-        endDate = f"{arrow.get(evaluation.timestamp, TIMEZONE).replace(hour=16, minute=0, second=0).format(DATETIME_FORMATTING)} {TIMEZONE}"
+        endDate = f"{arrow.get(date, tzinfo=TIMEZONE).replace(hour=16, minute=0, second=0).format(DATETIME_FORMATTING)} {TIMEZONE}"
         queue = self.app.req_historical_data(
             contract,
             endDate,  # end date time
@@ -42,6 +39,19 @@ class IBWrapper:
             1,  # format date
             False,  # keep up to date
             [],  # chart options
+        )
+
+        return queue
+
+    def get_live_data(self, evaluation: Evaluation) -> Queue[Any]:
+        logger.info(f"Getting live data for: {evaluation.ticker}")
+        contract = self.get_contract(evaluation.ticker)
+
+        queue = self.app.req_live_data(
+            contract,
+            "TRADES",  # what to show
+            False,
+            [],
         )
 
         return queue

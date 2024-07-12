@@ -11,11 +11,11 @@ def get_analysis_start_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
 
 
 def get_start_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
-    return arrow.get(date).replace(hour=11, minute=0, second=0)
+    return arrow.get(date).replace(hour=13, minute=40, second=0)  # TODO: Revert this
 
 
 def get_end_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
-    return arrow.get(date).replace(hour=15, minute=0, second=0)
+    return arrow.get(date).replace(hour=13, minute=50, second=0)  # TODO: Revert this
 
 
 STOP_LOSS = 0.02
@@ -25,10 +25,8 @@ CLOSE_GAP_MULTIPLIER_THRESHOLD = 10
 
 CHOSEN_STOCKS_AMOUNT = 2
 
-SHOULD_USE_RSI = False
-
 CHECK_PEAKS = True
 
 PEAK_PRICE_THRESHOLD = 0.25
 
-# enter_trade_datetime = datetime()
+MINIMUM_SHARE_PRICE = 1.5

@@ -1,64 +1,37 @@
-from datetime import timedelta, datetime
+from datetime import datetime, timedelta
 import arrow
-import backtrader as bt
 
-from atreyu_backtrader_api import IBStore
-from controllers.trading.commision import IBKRCommission  # type: ignore
-from controllers.trading.new_strategy import BaseNewTrader, TestNewTrader
+from consts.time_consts import TIMEZONE
+from controllers.trading.strategy import TestStrategy
 from models.evaluation import Evaluation
 from logger.logger import logger, log_important
 
 
+def compare_dates(actual_date: arrow.Arrow, article_datetime: arrow.Arrow) -> bool:
+    if actual_date.weekday() == 0:
+        return (
+            actual_date.shift(days=-3).replace(hour=16, minute=0, second=0)
+            < article_datetime
+            < actual_date.replace(hour=9, minute=30, second=0)
+        )
+    else:
+        return (
+            actual_date.shift(days=-1).replace(hour=16, minute=0, second=0)
+            < article_datetime
+            < actual_date.replace(hour=9, minute=30, second=0)
+        )
+
+
 class BaseTrader:
-
-    def add_datafeeds(
-        self, filtered_evaluations: list[Evaluation], date: datetime
-    ) -> None:
-        if not self.store or not self.cerebro:
-            raise ValueError("Store or Cerebro not initialized")
-        for evaluation in filtered_evaluations:
-            ib_data = self.store.getdata(
-                name=evaluation.symbol,  # Data name
-                dataname=evaluation.symbol,  # Symbol name
-                secType="STK",  # SecurityType is STOCK
-                exchange="SMART",  # Trading exchange IB's SMART exchange
-                currency="USD",  # Currency of SecurityType
-                fromdate=arrow.get(date).datetime.replace(tzinfo=None),
-                todate=arrow.get(date).shift(days=1).datetime.replace(tzinfo=None),
-                what="TRADES",
-                timeframe=bt.TimeFrame.Minutes,
-                historical=True,
-                rtbar=True,
-            )
-
-            self.cerebro.resampledata(
-                ib_data, timeframe=bt.TimeFrame.Minutes, compression=1
-            )
-
-            log_important(
-                f"Adding data for {evaluation.symbol} {arrow.get(date).format('YYYY-MM-DD')}",
-                "info",
-            )
-
-    def add_commission(self) -> None:
-        raise NotImplementedError
-
-    def add_filler(self) -> None:
-        raise NotImplementedError
-
-    def add_broker(self, cash: float) -> None:
-        raise NotImplementedError
-
-    def wrap_up(self) -> None:
-        raise NotImplementedError
-
     def test_strategy(
         self,
         evaluations: list[Evaluation],
     ) -> None:
         cash: float = 40000
         # min_date = min(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
-        min_date = arrow.get(evaluations[0].timestamp).replace(month=6, day=1)
+        min_date = arrow.get(evaluations[0].timestamp, tzinfo=TIMEZONE).replace(
+            month=6, day=1, hour=0, minute=0
+        )
         max_date = max(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
 
         logger.info(f"{min_date}  -   {max_date}")
@@ -69,60 +42,20 @@ class BaseTrader:
         ]
 
         log_important(f"cash: {cash}", "info")
-        waiting_stocks = []
         for date in date_range:
+            if date.weekday() == 5 or date.weekday() == 6:
+                continue
             filtered_evaluations = [
                 evaluation
                 for evaluation in evaluations
-                if arrow.get(date).date() == arrow.get(evaluation.timestamp).date()
+                if compare_dates(arrow.get(date), arrow.get(evaluation.timestamp))
             ]
-            if date.weekday() == 5 or date.weekday() == 6:
-                waiting_stocks.extend(filtered_evaluations)
-                continue
-            filtered_evaluations.extend(waiting_stocks)
-            waiting_stocks = []
+
             if len(filtered_evaluations) == 0:
                 continue
-            trader = TestNewTrader(date, is_testing=True, initial_cash=cash)
+            trader = TestStrategy(date, is_testing=True, initial_cash=cash)
             trader.main_loop(filtered_evaluations)
             filtered_evaluations = []
             cash = trader.cash
 
             log_important(f"cash: {trader.cash}", "info")
-
-
-class TestTrader(BaseTrader):
-
-    def add_commission(self) -> None:
-        if not self.cerebro:
-            raise ValueError("Cerebro not initialized")
-        comminfo = IBKRCommission()  # 0.5%
-        self.cerebro.broker.addcommissioninfo(comminfo)
-
-    def add_filler(self) -> None:
-        if not self.cerebro:
-            raise ValueError("Cerebro not initialized")
-        self.cerebro.broker.set_filler(bt.broker.filler.FixedSize())
-
-    def add_broker(self, cash: float) -> None:
-        if not self.cerebro:
-            raise ValueError("Store or Cerebro not initialized")
-        self.cerebro.broker.setcash(cash)
-
-    def wrap_up(self) -> None:
-        if not self.store:
-            raise ValueError("Store not initialized")
-        self.store.getbroker().stop(should_really_stop=True)
-
-
-class IBKRTrader(BaseTrader):
-    def add_commission(self) -> None:
-        pass
-
-    def add_filler(self) -> None:
-        pass
-
-    def add_broker(self, cash: float) -> None:
-        if not self.store or not self.cerebro:
-            raise ValueError("Store or Cerebro not initialized")
-        self.cerebro.setbroker(self.store.getbroker())

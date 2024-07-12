@@ -1,146 +1,39 @@
-# type: ignore
-import datetime as dt
-from enum import Enum
+from queue import Queue
+from random import randint
+from threading import Thread
+import time
 from typing import Any, Optional
 import arrow
-import backtrader as bt
-from numpy import average
-import pandas as pd
+from numpy import average, median
 from pandas import DataFrame
-from pandas import Series
-from pydantic import BaseModel, ConfigDict, computed_field
-import ta
-
+import pandas as pd
+from pydantic import BaseModel, ConfigDict
+from consts.time_consts import TIMEZONE
 from consts.trading_consts import (
     CHECK_PEAKS,
     CHOSEN_STOCKS_AMOUNT,
+    CLOSE_GAP_MULTIPLIER_THRESHOLD,
+    MINIMUM_SHARE_PRICE,
+    PEAK_PRICE_THRESHOLD,
     STOP_LOSS,
     TARGET_PROFIT,
-    CLOSE_GAP_MULTIPLIER_THRESHOLD,
-    get_end_datetime,
     get_analysis_start_datetime,
+    get_end_datetime,
     get_start_datetime,
     get_volume_analysis_start_datetime,
 )
-from utils.math_utils import D
+from ibapi.contract import Contract
+
+from interactive_api.app import IBapi, OrderStatus, OrderType
+from interactive_api.ibwrapper import IBWrapper
+from models.evaluation import Evaluation
 from logger.logger import logger, log_important
+from datetime import timedelta, datetime, tzinfo
+from interactive_api.app import Order
+from utils.math_utils import D
 
 
-class SeriesAccessor:
-    series: pd.Series
-
-    def __init__(self, series: Series) -> None:
-        self.series = series
-
-    def __getitem__(self, index: int) -> Any:
-        return self.series.iloc[index - 1]
-
-    def get(self, size: int) -> DataFrame:
-        return self.series.iloc[len(self.series) - size :]
-
-
-class DatetimeAccessor:
-    datetime: pd.DatetimeIndex
-
-    def __init__(self, datetime: pd.DatetimeIndex) -> None:
-        self.datetime = datetime
-
-    def datetime(self, index: int) -> dt.datetime:
-        return self.datetime[len(self.datetime) - 1 - index]
-
-
-class DataFrameAccessor:
-    df: DataFrame
-
-    def __init__(self, df: DataFrame) -> None:
-        self.df = df
-
-    @property
-    def open(self) -> SeriesAccessor:
-        return SeriesAccessor(self.df["open"])
-
-    @property
-    def high(self) -> SeriesAccessor:
-        return SeriesAccessor(self.df["high"])
-
-    @property
-    def low(self) -> SeriesAccessor:
-        return SeriesAccessor(self.df["low"])
-
-    @property
-    def close(self) -> SeriesAccessor:
-        return SeriesAccessor(self.df["close"])
-
-    @property
-    def datetime(self) -> Any:
-        return self.df.index
-
-
-def dataframe_to_another_timeframe(df: DataFrame, minutes: int) -> DataFrame:
-    new_df = df.resample(f"{minutes}min").agg(
-        {
-            "open": "first",
-            "high": "max",
-            "low": "min",
-            "close": "last",
-            "volume": "sum",
-        }
-    )
-    return new_df
-
-
-def datafeed_to_dataframe(datafeed: Any) -> DataFrame:
-    data_points: dict[str, list[Any]] = {
-        "datetime": [],
-        "open": [],
-        "high": [],
-        "low": [],
-        "close": [],
-        "volume": [],
-        # "openinterest": [],
-    }
-
-    datafeed_length = 0
-    for i in range(0, 100000):
-        try:
-            datafeed.datetime.datetime(0 - i)
-            datafeed_length = i
-        except IndexError:
-            break
-
-    for i in range(0 - datafeed_length, 1):
-        data_points["datetime"].append(datafeed.datetime.datetime(i))
-        data_points["open"].append(datafeed.open[i])
-        data_points["high"].append(datafeed.high[i])
-        data_points["low"].append(datafeed.low[i])
-        data_points["close"].append(datafeed.close[i])
-        data_points["volume"].append(datafeed.volume[i])
-        # data_points["openinterest"].append(datafeed.openinterest[i])
-
-    # Convert to a Pandas DataFrame
-    df = pd.DataFrame(data_points)
-    df.set_index("datetime", inplace=True)
-
-    return df
-
-
-def change_datafeed_timeframe(datafeed: Any, minutes: int) -> Any:
-    df = datafeed_to_dataframe(datafeed)
-    new_df = dataframe_to_another_timeframe(df, minutes)
-    new_datafeed = DataFrameAccessor(new_df)
-
-    return new_datafeed
-
-
-class StrategyType(Enum):
-    TEST = "TEST"
-    PAPER = "PAPER"
-    LIVE = "LIVE"
-
-
-def interpolate_volume(
-    volume: float, min_volume: int = 10000, max_volume: int = 40000
-) -> float:
+def interpolate_volume(volume: float, min_volume: int, max_volume: int) -> float:
     if volume <= min_volume:
         return 0
     elif volume >= max_volume:
@@ -149,723 +42,1012 @@ def interpolate_volume(
         return (volume - min_volume) / (max_volume - min_volume)
 
 
-class OrderType(Enum):
-    LONG = "long"
-    SHORT = "short"
-
-
 class DataManager(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    data1: Any
+    historic_queue: Queue[Any]
+    live_queue: Optional[Queue[Any]] = None
+    symbol: str
 
-    @computed_field
-    @property
-    def data3(self) -> str:
-        return change_datafeed_timeframe(self.data1, 3)
+    initial_order: Optional[Order] = None
+    limit_price_order: Optional[Order] = None
+    stop_price_order: Optional[Order] = None
+    market_order: Optional[Order] = None
 
-    @computed_field
-    @property
-    def data5(self) -> str:
-        return change_datafeed_timeframe(self.data1, 5)
-
-    symbol: Optional[str] = None
     score: Optional[float] = 0
     close_gap: Optional[float] = 0
-    average_volume: Optional[int] = None
+    average_volume: Optional[float] = None
     absolute_gap: Optional[float] = 0
-    should_use_rsi: bool = False
     peak_price_gap: Optional[float] = None
     is_in_position: bool = False
     did_leave_position: bool = False
+    position_size: Optional[int] = None
 
-    initial_order: Optional[bt.Order] = None
-    limit_price_order: Optional[bt.Order] = None
-    stop_price_order: Optional[bt.Order] = None
+    realdata: DataFrame
 
-    market_order: Optional[bt.Order] = None
+    @property
+    def data1(self) -> DataFrame:
+        df = self.realdata.resample("1min").agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+                "wap": "mean",
+            }
+        )
+        return complete_missing_minutes(df, "1min")
+
+    @property
+    def data3(self) -> DataFrame:
+        df = self.realdata.resample("3min").agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+                "wap": "mean",
+            }
+        )
+        return complete_missing_minutes(df, "3min")
+
+    @property
+    def data5(self) -> DataFrame:
+        df = self.realdata.resample("5min").agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+                "wap": "mean",
+            }
+        )
+        return complete_missing_minutes(df, "5min")
+
+    is_finished: bool = False
 
 
-def strategy_factory(
-    symbols: list[str],
-    _today: dt.datetime,
-    type: StrategyType,
-) -> bt.Strategy:
+def complete_missing_minutes(df: DataFrame, freq: str) -> DataFrame:
+    complete_index = pd.date_range(
+        start=df.index[0],
+        end=df.index[-1],
+        freq=freq,
+    )
 
-    class BaseStrategy(bt.Strategy):  # type: ignore
-        today: dt.datetime = _today
+    # Reindex the dataframe to the complete datetime index
+    df = df.reindex(complete_index)
 
-        data_ready: bool = False
-        data_managers: list[DataManager] = []
+    # Forward fill the OHLC values with the last known 'Close' price
+    df["close"] = df["close"].ffill()
+    df["open"] = df["open"].fillna(df["close"]).infer_objects(copy=False)  # type: ignore
+    df["high"] = df["high"].fillna(df["close"]).infer_objects(copy=False)  # type: ignore
+    df["low"] = df["low"].fillna(df["close"]).infer_objects(copy=False)  # type: ignore
 
-        def __init__(self) -> None:
-            super().__init__()
-            for index in range(0, len(self.datas)):
-                self.data_managers.append(
-                    DataManager(
-                        data1=self.datas[index],
-                        symbol=symbols[index],
+    # Set missing 'Volume' to 0
+    df["volume"] = df["volume"].fillna(0).infer_objects(copy=False)  # type: ignore
+
+    # Calculate VWAP for the filled rows
+    df["vwap"] = (
+        df["high"] + df["low"] + df["close"]
+    ) / 3  # Simple example for VWAP calculation
+
+    return df
+
+
+class BaseStrategy:
+    app: IBapi
+    ib_app_thread: Thread
+    ibwrapper: IBWrapper
+    is_testing: bool
+    cash: float
+    fake_cash: Optional[float] = None
+
+    today: datetime
+    data_ready: bool
+    data_managers: list[DataManager]
+
+    def __init__(
+        self,
+        today: datetime,
+        is_testing: bool = False,
+        initial_cash: Optional[float] = None,
+    ) -> None:
+        self.app = IBapi()
+        self.app.connect("127.0.0.1", 7497, randint(1, 100))
+        self.ib_app_thread = Thread(target=self.app.run, daemon=True)
+        self.ib_app_thread.start()
+        self.today = today
+        self.ibwrapper = IBWrapper(self.app)
+        self.is_testing = is_testing
+        self.data_managers = []
+        self.data_ready = False
+        time.sleep(2)
+        if not initial_cash:
+            self.cash = self.get_cash()
+            self.fake_cash = None
+        else:
+            self.cash = initial_cash
+            self.fake_cash = initial_cash
+
+    def main_loop(self, evaluations: list[Evaluation]) -> None:
+        for evaluation in evaluations:
+            empty_df = pd.DataFrame(
+                columns=["open", "high", "low", "close", "volume", "wap"]
+            )
+            empty_df.index = pd.to_datetime(empty_df.index)
+            self.data_managers.append(
+                DataManager(
+                    symbol=evaluation.ticker,
+                    historic_queue=self.ibwrapper.get_historical_data(
+                        evaluation, self.today
+                    ),
+                    live_queue=(
+                        self.ibwrapper.get_live_data(evaluation)
+                        if not self.is_testing
+                        else None
+                    ),
+                    realdata=empty_df,
+                )
+            )
+        self.iterate_queues()
+        if self.fake_cash is not None:
+            self.cash = self.fake_cash
+        self.app.disconnect()
+        self.ib_app_thread.join()
+
+    def get_past_data(self) -> None:
+        while True:
+            if all(
+                [
+                    curr_data_manager.is_finished
+                    for curr_data_manager in self.data_managers
+                ]
+            ):
+                for data_manager in self.data_managers:
+                    if data_manager.realdata.empty:
+                        continue
+                return
+            while not all(
+                [data_manager.is_finished for data_manager in self.data_managers]
+            ):
+                for data_manager in self.data_managers:
+                    if data_manager.historic_queue.empty() or data_manager.is_finished:
+                        continue
+
+                    while not data_manager.historic_queue.empty():
+                        dict_data: Optional[dict[str, Any]] = (
+                            data_manager.historic_queue.get()
+                        )
+                        if dict_data is None:
+                            data_manager.is_finished = True
+                            break
+                        date = dict_data["date"]
+                        dict_data.pop("date")
+                        data_manager.realdata.loc[date] = dict_data  # type: ignore
+
+    def get_live_data(self) -> None:
+        for data_manager in self.data_managers:
+            if data_manager.live_queue is None:
+                raise Exception("Live queue is None")
+            if data_manager.live_queue.empty():
+                continue
+
+            while not data_manager.live_queue.empty():
+                dict_data: Optional[dict[str, Any]] = data_manager.live_queue.get()
+                if dict_data is None:
+                    continue
+                date = dict_data["date"]
+                dict_data.pop("date")
+                data_manager.realdata.loc[date] = dict_data  # type: ignore
+
+    def iterate_queues(self) -> None:
+
+        self.get_past_data()
+        if self.is_testing:
+            existing_dfs = [
+                data_manager.realdata for data_manager in self.data_managers
+            ]
+            for data_manager in self.data_managers:
+                empty_df = pd.DataFrame(
+                    columns=["open", "high", "low", "close", "volume", "wap"]
+                )
+                empty_df.index = pd.to_datetime(empty_df.index)
+                data_manager.realdata = empty_df
+            start_datetime = arrow.get(self.today).replace(hour=9, minute=30).datetime
+            end_datetime = arrow.get(self.today).replace(hour=16, minute=0).datetime
+            curr_datetime = start_datetime
+            while curr_datetime < end_datetime:
+                for data_manager, existing_df in zip(self.data_managers, existing_dfs):
+                    if curr_datetime in existing_df.index:
+                        data_manager.realdata.loc[curr_datetime] = existing_df.loc[  # type: ignore
+                            curr_datetime
+                        ]
+                curr_datetime += timedelta(minutes=1)
+                self.trade()
+        else:
+            while arrow.now(tz=TIMEZONE).hour < 16:
+                self.get_live_data()
+                self.trade()
+
+    def should_enter_position(self, curr_datetime: datetime) -> bool:
+        return (
+            curr_datetime > get_start_datetime(self.today).shift(minutes=1).datetime
+            and not any(
+                [data_manager.initial_order for data_manager in self.data_managers]
+            )
+            and any(
+                [data_manager.average_volume for data_manager in self.data_managers]
+            )
+        )
+
+    def get_curr_datetime(self) -> datetime:
+        raise NotImplementedError()
+
+    def trade(self) -> None:
+        curr_datetime = self.get_curr_datetime()
+        if curr_datetime is None:
+            logger.info("No data available")
+            return
+
+        if any([data_manager.is_in_position for data_manager in self.data_managers]):
+            self.check_orders()
+
+        # Checking if time is up for the day
+        if curr_datetime >= get_end_datetime(self.today).datetime and all(
+            [data_manager.is_in_position for data_manager in self.data_managers]
+        ):
+            self.check_end_position()
+            return
+
+        if self.should_enter_position():
+            self.enter_position()
+            return
+        for data_manager in self.data_managers:
+            if data_manager.data1.empty:
+                continue
+            curr_datetime = data_manager.data1.index[-1]
+
+            if (
+                self.should_start_trading(data_manager)
+                and data_manager.data1["close"].iloc[-1] > MINIMUM_SHARE_PRICE
+                and data_manager.average_volume is None
+            ):
+                self.get_stats(data_manager)
+
+            if (
+                data_manager.is_in_position
+                and not data_manager.did_leave_position
+                and CHECK_PEAKS
+            ):
+                self.check_peaks()
+
+    def should_start_trading(self, data_manager: DataManager) -> bool:
+        raise NotImplementedError()
+
+    def get_cash(self) -> float:
+        raise NotImplementedError()
+
+    def get_price(self, price: float) -> float:
+        raise NotImplementedError()
+
+    def get_price_with_deviation(self, price: float, order_type: OrderType) -> float:
+        raise NotImplementedError()
+
+    def get_close_gap_percentage(self, data_manager: DataManager) -> float:
+        close_gap: float = (
+            data_manager.data1["close"].iloc[-1]
+            / data_manager.data1["open"].loc[
+                get_analysis_start_datetime(self.today).datetime,
+            ]
+        ) - 1
+        return close_gap
+
+    def get_close_gap_difference(
+        self, data_manager: DataManager, datetime: arrow.Arrow
+    ) -> Optional[float]:
+        try:
+            close_gap: float = (
+                data_manager.data1["close"].iloc[-1]
+                - data_manager.data1["open"].loc[datetime.datetime]
+            )
+        except:
+            logger.info("Error getting close gap difference", exc_info=True)
+            return None
+        return close_gap
+
+    def get_average_volume(self, data_manager: DataManager) -> float:
+        average_volume = float(
+            float(
+                median(
+                    data_manager.data1.loc[
+                        get_volume_analysis_start_datetime(self.today).datetime :,  # type: ignore
+                        "volume",
+                    ],
+                )
+            )
+            * average(
+                data_manager.data1.loc[
+                    get_volume_analysis_start_datetime(self.today).datetime :, "close"  # type: ignore
+                ],
+            )
+        )
+        log_important(
+            f"Average volume for {data_manager.symbol}: {average_volume}", "info"
+        )
+        return average_volume
+
+    def should_trade_stock(self, data_manager: DataManager) -> bool:
+        if data_manager.close_gap is None:
+            raise Exception("Close gap is None")
+        absolute_gap = 0
+        filtered_df = data_manager.data5.loc[
+            get_analysis_start_datetime(self.today).shift(minutes=5).datetime :  # type: ignore
+        ].copy()
+
+        filtered_df["high_low_diff"] = filtered_df["high"] - filtered_df["low"]
+        absolute_gap = filtered_df["high_low_diff"].sum(skipna=True)
+
+        # TODO: Revert this
+        # if absolute_gap > abs(data_manager.close_gap) * CLOSE_GAP_MULTIPLIER_THRESHOLD:
+        #     log_important(
+        #         f"Not trading {data_manager.symbol} because of absolute gap", "info"
+        #     )
+        #     return False
+
+        data_manager.absolute_gap = abs(data_manager.close_gap) / absolute_gap
+        return True
+
+    def check_end_position(self) -> None:
+        for data_manager in self.data_managers:
+            if (
+                data_manager.did_leave_position
+                or data_manager.market_order is not None
+                or data_manager.initial_order is None
+                or data_manager.initial_order.status not in [OrderStatus.COMPLETED]
+                or data_manager.limit_price_order.status in [OrderStatus.COMPLETED]  # type: ignore
+                or data_manager.stop_price_order.status in [OrderStatus.COMPLETED]  # type: ignore
+                or data_manager.position_size == 0
+            ):
+                continue
+            self.make_end_market_order(data_manager)
+            data_manager.did_leave_position = True
+        return
+
+    def get_stats(self, data_manager: DataManager) -> None:
+        try:
+            data_manager.average_volume = self.get_average_volume(data_manager)
+        except Exception:
+            logger.warning(
+                f"Error getting average volume {data_manager.symbol}",
+                exc_info=True,
+            )
+            data_manager.average_volume = 0
+        if data_manager.average_volume is None:
+            data_manager.score = 0
+            return
+        data_manager.close_gap = self.get_close_gap_difference(
+            data_manager, get_analysis_start_datetime(self.today)
+        )
+        if data_manager.close_gap is None:
+            data_manager.score = 0
+            data_manager.close_gap = 0
+            return
+
+        if data_manager.close_gap > 0:
+            should_trade_stock = self.should_trade_stock(data_manager)
+            if not should_trade_stock:
+                data_manager.score = 0
+            else:
+                if data_manager.absolute_gap is None:
+                    raise Exception("Absolute gap is None")
+                data_manager.score = (
+                    abs(self.get_close_gap_percentage(data_manager))
+                    * data_manager.absolute_gap
+                    * interpolate_volume(
+                        data_manager.average_volume,
+                        int(self.cash // (CHOSEN_STOCKS_AMOUNT * 2)),
+                        int(self.cash // CHOSEN_STOCKS_AMOUNT),
                     )
+                    * 100
                 )
 
-        def should_start_trading(self, curr_datetime: dt.datetime) -> bool:
-            raise NotImplementedError()
+                log_important(
+                    f"Score for {data_manager.symbol}: {data_manager.score:.3f}", "info"
+                )
+        else:
+            should_trade_stock = self.should_trade_stock(data_manager)
+            if not should_trade_stock:
+                data_manager.score = 0
+            else:
+                if data_manager.absolute_gap is None:
+                    raise Exception("Absolute gap is None")
+                data_manager.score = (
+                    abs(self.get_close_gap_percentage(data_manager))
+                    * data_manager.absolute_gap
+                    * interpolate_volume(
+                        data_manager.average_volume,
+                        int(self.cash // (CHOSEN_STOCKS_AMOUNT * 2)),
+                        int(self.cash // CHOSEN_STOCKS_AMOUNT),
+                    )
+                    * 100
+                )
+                log_important(
+                    f"Score for {data_manager.symbol}: {data_manager.score:.3f}", "info"
+                )
 
-        def get_cash(self) -> float:
-            return self.broker.getcash()  # type: ignore
+    def enter_position(self) -> None:
+        # Entering position with stocks with highest scores
+        filtered_scores: list[DataManager] = []
+        for data_manager in self.data_managers:
+            if data_manager.score is not None and data_manager.score > 0:
+                filtered_scores.append(data_manager)
+        sorted_scores: list[DataManager] = sorted(
+            filtered_scores, key=lambda x: x.score, reverse=True  # type: ignore
+        )[0:CHOSEN_STOCKS_AMOUNT]
+        for data_manager in sorted_scores:
+            curr_datetime = data_manager.data1.index[-1]
+            if (
+                not (
+                    get_start_datetime(self.today).shift(minutes=-1).datetime
+                    <= curr_datetime
+                    < get_start_datetime(self.today).shift(minutes=30).datetime
+                )
+                or data_manager.is_in_position
+            ):
+                continue
 
-        def notify_data(self, data: Any, status: int) -> None:
-            if status == data.LIVE:
-                self.data_ready = True
-
-        def get_price(self, price: float) -> float:
-            raise NotImplementedError()
-
-        def get_price_with_deviation(
-            self, price: float, order_type: OrderType
-        ) -> float:
-            raise NotImplementedError()
-
-        def notify_order(self, order: bt.Order) -> None:
-            curr_datetime = self.get_curr_datetime()
-            target_data_manager: Optional[DataManager] = None
-            for data_manager in self.data_managers:
-                if order in [
+            if data_manager.average_volume is None:
+                raise Exception("Average volume is None")
+            size = self.get_size(
+                data_manager.data1["close"].iloc[-1],
+                data_manager.average_volume,
+                self.cash,
+                len(sorted_scores),
+            )
+            if data_manager.close_gap is None:
+                continue
+            data_manager.position_size = size
+            if data_manager.close_gap > D("0"):
+                logger.info(
+                    f"Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]}"
+                )
+                (
                     data_manager.initial_order,
                     data_manager.limit_price_order,
                     data_manager.stop_price_order,
-                    data_manager.market_order,
-                ]:
-                    target_data_manager = data_manager
-            type = ""
-            if order.isbuy():
-                type = "Buy"
+                ) = self.place_bracket_order(
+                    action=OrderType.BUY,
+                    quantity=size,
+                    price_limit=data_manager.data1["close"].iloc[-1],
+                    take_profit_limit_price=data_manager.data1["close"].iloc[-1]
+                    * (1 + TARGET_PROFIT),
+                    stop_loss_price=data_manager.data1["close"].iloc[-1]
+                    * (1 - STOP_LOSS),
+                    stop_loss_limit_price=data_manager.data1["close"].iloc[-1]
+                    * (1 - STOP_LOSS),
+                    contract=self.ibwrapper.get_contract(data_manager.symbol),
+                    parent_valid=data_manager.data1.index[-1] + timedelta(minutes=30),
+                    children_valid=arrow.get(data_manager.data1.index[-1])
+                    .replace(hour=15, minute=0, second=0)
+                    .datetime,
+                )
             else:
-                type = "Sell"
-
-            if target_data_manager is None:
-                return
-
-            if order.status in [order.Accepted]:
-                return
-
-            if order.status in [order.Canceled]:
                 logger.info(
-                    f"{type} cancelled {target_data_manager.symbol} {curr_datetime.time()}"
+                    f"Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]}"
                 )
-                return
-
-            if order.status in [order.Expired]:
-                logger.info(
-                    f"{type} expired {target_data_manager.symbol} {curr_datetime.time()}"
-                )
-                return
-
-            if order.status in [order.Completed]:
-                if order == target_data_manager.initial_order:
-                    log_important(
-                        f"{type} completed {target_data_manager.symbol} {curr_datetime.time()} share_price: {order.executed.price}, commission: {order.executed.comm}",
-                        "info",
-                    )
-                else:
-                    if target_data_manager.initial_order is not None:
-                        value = (
-                            (order.executed.price * order.executed.size)
-                            + (
-                                target_data_manager.initial_order.executed.price
-                                * target_data_manager.initial_order.executed.size
-                            )
-                        ) * -1
-                        log_important(
-                            f"{type} completed {target_data_manager.symbol} {curr_datetime.time()} share_price: {order.executed.price:.3f}, value: {value:.3f}, commission: {order.executed.comm}",
-                            "info",
-                        )
-                self.bar_executed = len(self)
-
-        def stop_run(self) -> None:
-            print(f"Stopping run {self.get_curr_datetime()}")
-            self.env.runstop()
-
-        def buy_custom(
-            self, parent: Optional[bt.Order] = None, **kwargs: Any
-        ) -> bt.Order:
-            raise NotImplementedError()
-
-        def sell_custom(
-            self, parent: Optional[bt.Order] = None, **kwargs: Any
-        ) -> bt.Order:
-            raise NotImplementedError()
-
-        def get_index_by_datetime(
-            self, datetime: dt.datetime, tick_size: int = 1
-        ) -> int:
-            curr_datetime = self.get_curr_datetime()
-            datetime = datetime.replace(tzinfo=None)
-            return 0 - int((curr_datetime - datetime).seconds // (60 * tick_size))
-
-        def get_index_by_timedelta(
-            self, timedelta: dt.timedelta, tick_size: int = 1
-        ) -> int:
-            return 0 - int(timedelta.seconds // (60 * tick_size))
-
-        def bracket_order_custom(
-            self,
-            data: Any,
-            limitprice: float,
-            price: float,
-            stopprice: float,
-            size: float,
-            parent_valid: dt.timedelta | dt.datetime,
-            children_valid: dt.timedelta | dt.datetime,
-            order_type: OrderType,
-        ) -> tuple[bt.Order, bt.Order, bt.Order]:
-            if order_type == OrderType.LONG:
-                main = self.buy_custom(
-                    data=data,
-                    price=self.get_price_with_deviation(price, OrderType.LONG),
-                    size=size,
-                    exectype=bt.Order.Limit,
-                    transmit=False,
-                    valid=parent_valid,
-                    outsideRth=True,
-                )
-                limit_price = self.sell_custom(
-                    data=data,
-                    price=self.get_price(limitprice),
-                    size=size,
-                    exectype=bt.Order.Limit,
-                    transmit=False,
-                    parent=main,
-                    valid=children_valid,
-                    outsideRth=True,
-                )
-                stop_price = self.sell_custom(
-                    data=data,
-                    price=self.get_price(stopprice),
-                    size=size,
-                    exectype=bt.Order.StopLimit,
-                    plimit=self.get_price(stopprice * 0.95),
-                    transmit=True,
-                    parent=main,
-                    valid=children_valid,
-                )
-            else:
-                main = self.sell_custom(
-                    data=data,
-                    price=self.get_price_with_deviation(price, OrderType.SHORT),
-                    size=size,
-                    exectype=bt.Order.Limit,
-                    transmit=False,
-                    valid=parent_valid,
-                )
-                limit_price = self.buy_custom(
-                    data=data,
-                    price=self.get_price(limitprice),
-                    size=size,
-                    exectype=bt.Order.Limit,
-                    transmit=False,
-                    parent=main,
-                    valid=children_valid,
-                )
-                stop_price = self.buy_custom(
-                    data=data,
-                    price=self.get_price(stopprice),
-                    size=size,
-                    exectype=bt.Order.StopLimit,
-                    plimit=self.get_price(stopprice * 1.05),
-                    transmit=True,
-                    parent=main,
-                    valid=children_valid,
+                (
+                    data_manager.initial_order,
+                    data_manager.limit_price_order,
+                    data_manager.stop_price_order,
+                ) = self.place_bracket_order(
+                    action=OrderType.SELL,
+                    quantity=size,
+                    price_limit=data_manager.data1["close"].iloc[-1],
+                    take_profit_limit_price=data_manager.data1["close"].iloc[-1]
+                    * (1 - TARGET_PROFIT),
+                    stop_loss_price=data_manager.data1["close"].iloc[-1]
+                    * (1 + STOP_LOSS),
+                    stop_loss_limit_price=data_manager.data1["close"].iloc[-1]
+                    * (1 + STOP_LOSS),
+                    contract=self.ibwrapper.get_contract(data_manager.symbol),
+                    parent_valid=data_manager.data1.index[-1] + timedelta(minutes=30),
+                    children_valid=arrow.get(data_manager.data1.index[-1])
+                    .replace(hour=15, minute=0, second=0)
+                    .datetime,
                 )
 
-            return main, limit_price, stop_price
+        for data_manager in self.data_managers:
+            data_manager.is_in_position = True
 
-        def get_close_gap_percentage(self, data_manager: DataManager) -> float:
-            close_gap: float = (
-                data_manager.data1.close[0]
-                / data_manager.data1.open[
-                    self.get_index_by_datetime(
-                        get_analysis_start_datetime(self.today).datetime.replace(
-                            tzinfo=None
-                        ),
-                    )
-                ]
-            ) - 1
-            return close_gap
-
-        def get_close_gap_difference(
-            self, data_manager: DataManager, datetime: arrow.Arrow
-        ) -> float:
-            close_gap: float = (
-                data_manager.data1.close[0]
-                - data_manager.data1.open[
-                    self.get_index_by_datetime(
-                        datetime.datetime.replace(tzinfo=None),
-                    )
-                ]
-            )
-            return close_gap
-
-        def get_average_volume(self, data_manager: DataManager) -> int:
-            average_volume = int(
-                average(
-                    data_manager.data1.volume.get(
-                        size=abs(
-                            self.get_index_by_datetime(
-                                get_volume_analysis_start_datetime(
-                                    self.today
-                                ).datetime.replace(tzinfo=None),
-                            )
-                        )
-                    )
-                )
-                * average(
-                    data_manager.data1.open.get(
-                        size=abs(
-                            self.get_index_by_datetime(
-                                get_volume_analysis_start_datetime(
-                                    self.today
-                                ).datetime.replace(tzinfo=None),
-                            )
-                        )
-                    )
-                )
-            )
-            log_important(
-                f"Average volume for {data_manager.symbol}: {average_volume}", "info"
-            )
-            return average_volume
-
-        def should_trade_stock(self, data_manager: DataManager) -> bool:
-            if data_manager.close_gap is None:
-                raise Exception("Close gap is None")
-            absolute_gap = 0
-            start_index = self.get_index_by_datetime(
-                get_analysis_start_datetime(self.today)
-                .shift(minutes=5)
-                .datetime.replace(tzinfo=None),  # TODO maybe change this
-                tick_size=5,
-            )
-
-            for i in range(start_index, 1):
-                absolute_gap += abs(
-                    data_manager.data5.close[i] - data_manager.data5.close[i - 1]
-                )
+    def check_peaks(self) -> None:
+        for data_manager in self.data_managers:
             if (
-                absolute_gap
-                > abs(data_manager.close_gap) * CLOSE_GAP_MULTIPLIER_THRESHOLD
+                not data_manager.initial_order
+                or not data_manager.initial_order.status == OrderStatus.COMPLETED
+                or data_manager.did_leave_position
             ):
-                log_important(
-                    f"Not trading {data_manager.symbol} because of absolute gap", "info"
-                )
-                return False
-            adx = ta.trend.ADXIndicator(
-                high=pd.Series(data_manager.data3.high.get(size=28)),
-                low=pd.Series(data_manager.data3.low.get(size=28)),
-                close=pd.Series(data_manager.data3.close.get(size=28)),
-                window=14,
-            )
-            curr_adx = adx.adx().iloc[-1]
-            log_important(f"ADX for {data_manager.symbol}: {curr_adx}", "info")
-
-            data_manager.absolute_gap = abs(data_manager.close_gap) / absolute_gap
-            return True
-
-        def get_curr_datetime(self) -> dt.datetime:
-            return arrow.get(self.data.datetime.datetime(0)).datetime.replace(
-                tzinfo=None
-            )
-
-        def make_end_market_order(self, data_manager: DataManager) -> None:
-            if (
-                data_manager.initial_order is None
-                or data_manager.limit_price_order is None
-                or data_manager.stop_price_order is None
-            ):
-                raise Exception("Initial order is None")
-            logger.info(
-                f"Making end market order for {data_manager.symbol} {self.get_curr_datetime()}"
-            )
-            data_manager.limit_price_order.cancel()
-            data_manager.stop_price_order.cancel()
-            if data_manager.initial_order.isbuy():
-                data_manager.market_order = self.sell_custom(
-                    data=data_manager.data1,
-                    size=abs(self.getposition(data_manager.data1).size),
-                    exectype=bt.Order.Limit,
-                    price=self.get_price_with_deviation(
-                        data_manager.data1.close[0], OrderType.SHORT
-                    ),
-                )
-            else:
-                data_manager.market_order = self.buy_custom(
-                    data=data_manager.data1,
-                    size=abs(self.getposition(data_manager.data1).size),
-                    exectype=bt.Order.Limit,
-                    price=self.get_price_with_deviation(
-                        data_manager.data1.close[0], OrderType.LONG
-                    ),
-                )
-
-        def check_end_position(self) -> None:
-            for data_manager in self.data_managers:
+                continue
+            if data_manager.close_gap is not None and data_manager.close_gap > 0:
                 if (
-                    data_manager.did_leave_position
-                    or data_manager.market_order is not None
-                    or data_manager.initial_order is None
-                    or data_manager.initial_order.status not in [bt.Order.Completed]
-                    or data_manager.limit_price_order.status in [bt.Order.Completed]  # type: ignore
-                    or data_manager.stop_price_order.status in [bt.Order.Completed]  # type: ignore
+                    data_manager.realdata["close"].iloc[-1]
+                    > 1.01 * data_manager.initial_order.price
                 ):
-                    continue
-                if data_manager.stop_price_order.status not in [  # type: ignore
-                    bt.Order.Completed
-                ] and data_manager.stop_price_order.status not in [  # type: ignore
-                    bt.Order.Completed
-                ]:
+                    if (
+                        not data_manager.peak_price_gap
+                        or data_manager.peak_price_gap
+                        > (
+                            data_manager.realdata["close"].iloc[-1]
+                            / data_manager.initial_order.price
+                        )
+                        - 1
+                    ):
+                        data_manager.peak_price_gap = (
+                            data_manager.realdata["close"].iloc[-1]
+                            / data_manager.initial_order.price
+                        ) - 1
+                if (
+                    data_manager.peak_price_gap is not None
+                    and (
+                        data_manager.realdata["close"].iloc[-1]
+                        / data_manager.initial_order.price
+                    )
+                    - 1
+                    < PEAK_PRICE_THRESHOLD * data_manager.peak_price_gap
+                ):
                     self.make_end_market_order(data_manager)
-                data_manager.did_leave_position = True
-            return
+                    data_manager.did_leave_position = True
+            else:
+                if (
+                    data_manager.realdata["close"].iloc[-1]
+                    < 0.99 * data_manager.initial_order.price
+                ):
+                    if (
+                        not data_manager.peak_price_gap
+                        or data_manager.peak_price_gap
+                        > (
+                            data_manager.initial_order.price
+                            / data_manager.realdata["close"].iloc[-1]
+                        )
+                        - 1
+                    ):
+                        data_manager.peak_price_gap = (
+                            data_manager.initial_order.price
+                            / data_manager.realdata["close"].iloc[-1]
+                        ) - 1
+                if (
+                    data_manager.peak_price_gap is not None
+                    and (
+                        data_manager.initial_order.price
+                        / data_manager.realdata["close"].iloc[-1]
+                    )
+                    - 1
+                    < PEAK_PRICE_THRESHOLD * data_manager.peak_price_gap
+                ):
+                    logger.info(
+                        f"Leaving position because of peaks {data_manager.symbol} {data_manager.realdata.index[-1]}"
+                    )
+                    self.make_end_market_order(data_manager)
+                    data_manager.did_leave_position = True
 
-        def get_stats(self, data_manager: DataManager) -> None:
-            curr_datetime = self.get_curr_datetime()
+    def get_size(
+        self, price: float, average_volume: float, cash: float, divider: int
+    ) -> int:
+        raise NotImplementedError()
+
+    def place_bracket_order(
+        self,
+        action: OrderType,
+        quantity: int,
+        price_limit: float,
+        take_profit_limit_price: float,
+        stop_loss_price: float,
+        stop_loss_limit_price: float,
+        parent_valid: datetime,
+        children_valid: datetime,
+        contract: Contract,
+    ) -> tuple[Order, Order, Order]:
+        raise NotImplementedError()
+
+    def check_orders(self) -> None:
+        raise NotImplementedError()
+
+    def make_end_market_order(self, data_manager: DataManager) -> None:
+        raise NotImplementedError()
+
+
+class TestStrategy(BaseStrategy):
+
+    def get_curr_datetime(self) -> datetime:
+        datetimes = []
+        for data_manager in self.data_managers:
             try:
-                data_manager.average_volume = self.get_average_volume(data_manager)
-            except Exception:
-                logger.warning(
-                    f"Error getting average volume {data_manager.symbol}",
-                    exc_info=True,
-                )
-                data_manager.average_volume = 0
-            if (
-                data_manager.average_volume is None
-                or data_manager.average_volume < 10000
-            ):
-                log_important(
-                    f"Not trading {data_manager.symbol} because of volume", "info"
-                )
-                data_manager.is_in_position = True
-                return
-            data_manager.close_gap = self.get_close_gap_difference(
-                data_manager, get_analysis_start_datetime(self.today)
-            )
-            if data_manager.close_gap > 0:
-                should_trade_stock = self.should_trade_stock(data_manager)
-                if not should_trade_stock:
-                    data_manager.is_in_position = True
-                else:
-                    if data_manager.absolute_gap is None:
-                        raise Exception("Absolute gap is None")
-                    data_manager.score = (
-                        abs(self.get_close_gap_percentage(data_manager))
-                        * data_manager.absolute_gap
-                        * interpolate_volume(
-                            data_manager.average_volume,
-                            10000,
-                            int(self.get_cash() // 2),
-                        )
-                        * 100
+                datetimes.append(data_manager.data1.index[-1])
+            except:
+                continue
+        if len(datetimes) == 0:
+            return
+        curr_datetime = max(datetimes)
+
+    def should_start_trading(self, data_manager: DataManager) -> bool:
+        curr_datetime: datetime = data_manager.data1.index[-1]
+        return (
+            get_start_datetime(self.today).shift(minutes=-1).datetime
+            <= curr_datetime
+            < get_start_datetime(self.today).shift(minutes=30).datetime
+        )
+
+    def get_size(
+        self, price: float, average_volume: float, cash: float, divider: int
+    ) -> int:
+        size = min(
+            int(average_volume // 2),
+            int(cash * 0.99 // price // divider),
+        )
+        return size
+
+    def get_cash(self) -> float:
+        if self.fake_cash is None:
+            raise Exception("Fake cash is None")
+        return self.fake_cash
+
+    def place_bracket_order(
+        self,
+        action: OrderType,
+        quantity: int,
+        price_limit: float,
+        take_profit_limit_price: float,
+        stop_loss_price: float,
+        stop_loss_limit_price: float,
+        parent_valid: datetime,
+        children_valid: datetime,
+        contract: Contract,
+    ) -> tuple[Order, Order, Order]:
+
+        orders = (
+            Order(
+                id=randint(0, 1000000),
+                queue=Queue[Any](),
+                status=OrderStatus.COMPLETED,
+                order_type=action,
+                price=float(
+                    average(
+                        [
+                            price_limit,
+                            self.get_price_with_deviation(price_limit, action),
+                        ]
                     )
-
-                    log_important(
-                        f"Score for {data_manager.symbol}: {data_manager.score}", "info"
-                    )
-            else:
-                should_trade_stock = self.should_trade_stock(data_manager)
-                if not should_trade_stock:
-                    data_manager.is_in_position = True
-                else:
-                    if data_manager.absolute_gap is None:
-                        raise Exception("Absolute gap is None")
-                    data_manager.score = (
-                        abs(self.get_close_gap_percentage(data_manager))
-                        * data_manager.absolute_gap
-                        * interpolate_volume(
-                            data_manager.average_volume,
-                            10000,
-                            int(self.get_cash() // 2),
-                        )
-                        * 100
-                    )
-                    log_important(
-                        f"Score for {data_manager.symbol}: {data_manager.score}", "info"
-                    )
-
-        def enter_position(self) -> None:
-            for data_manager in self.data_managers:
-                if (
-                    data_manager.data1.datetime.datetime(0) != self.get_curr_datetime()
-                    or data_manager.is_in_position
-                ):
-                    data_manager.is_in_position = True
-                    continue
-                self.get_stats(data_manager)
-
-            # Entering position with stocks with highest scores
-            filtered_scores: list[DataManager] = []
-            for data_manager in self.data_managers:
-                if data_manager.score is not None and data_manager.score > 0:
-                    filtered_scores.append(data_manager)
-            sorted_scores: list[DataManager] = sorted(
-                filtered_scores, key=lambda x: x.score, reverse=True  # type: ignore
-            )[0:CHOSEN_STOCKS_AMOUNT]
-            cash = self.get_cash()
-            for data_manager in sorted_scores:
-                if data_manager.is_in_position:
-                    continue
-                data = data_manager.data1
-                if data_manager.average_volume is None:
-                    raise Exception("Average volume is None")
-                size = self.get_size(
-                    data.close[0],
-                    data_manager.average_volume,
-                    cash,
-                    len(sorted_scores),
-                )
-                if data_manager.close_gap is not None and data_manager.close_gap > D(
-                    "0"
-                ):
-                    (
-                        data_manager.initial_order,
-                        data_manager.limit_price_order,
-                        data_manager.stop_price_order,
-                    ) = self.bracket_order_custom(
-                        data=data,
-                        size=size,
-                        limitprice=data.close[0] * (1 + TARGET_PROFIT),
-                        price=data.close[0],
-                        stopprice=data.close[0] * (1 - STOP_LOSS),
-                        parent_valid=dt.timedelta(minutes=30),
-                        children_valid=dt.timedelta(hours=4),
-                        order_type=OrderType.LONG,
-                    )
-                else:
-                    (
-                        data_manager.initial_order,
-                        data_manager.limit_price_order,
-                        data_manager.stop_price_order,
-                    ) = self.bracket_order_custom(
-                        data=data,
-                        size=size,
-                        limitprice=data.close[0] * (1 - TARGET_PROFIT),
-                        price=data.close[0],
-                        stopprice=data.close[0] * (1 + STOP_LOSS),
-                        parent_valid=dt.timedelta(minutes=30),
-                        children_valid=dt.timedelta(hours=4),
-                        order_type=OrderType.SHORT,
-                    )
-
-            for data_manager in self.data_managers:
-                data_manager.is_in_position = True
-
-        def check_peaks(self) -> None:
-            for data_manager in self.data_managers:
-                if (
-                    not data_manager.initial_order
-                    or data_manager.initial_order.executed.price <= 0
-                    or data_manager.did_leave_position
-                ):
-                    continue
-                if data_manager.close_gap is not None and data_manager.close_gap > 0:
-                    if (
-                        data_manager.data1.close[0]
-                        > 1.01 * data_manager.initial_order.executed.price
-                    ):
-                        if (
-                            not data_manager.peak_price_gap
-                            or data_manager.peak_price_gap
-                            > (
-                                data_manager.data1.close[0]
-                                / data_manager.initial_order.executed.price
-                            )
-                            - 1
-                        ):
-                            data_manager.peak_price_gap = (
-                                data_manager.data1.close[0]
-                                / data_manager.initial_order.executed.price
-                            ) - 1
-                    if (
-                        data_manager.peak_price_gap is not None
-                        and (
-                            data_manager.data1.close[0]
-                            / data_manager.initial_order.executed.price
-                        )
-                        - 1
-                        < 0.25 * data_manager.peak_price_gap
-                    ):
-                        self.make_end_market_order(data_manager)
-                        data_manager.did_leave_position = True
-                else:
-                    if (
-                        data_manager.data1.close[0]
-                        < 0.99 * data_manager.initial_order.executed.price
-                    ):
-                        if (
-                            not data_manager.peak_price_gap
-                            or data_manager.peak_price_gap
-                            > (
-                                data_manager.initial_order.executed.price
-                                / data_manager.data1.close[0]
-                            )
-                            - 1
-                        ):
-                            data_manager.peak_price_gap = (
-                                data_manager.initial_order.executed.price
-                                / data_manager.data1.close[0]
-                            ) - 1
-                    if (
-                        data_manager.peak_price_gap is not None
-                        and (
-                            data_manager.initial_order.executed.price
-                            / data_manager.data1.close[0]
-                        )
-                        - 1
-                        < 0.25 * data_manager.peak_price_gap
-                    ):
-                        logger.info(
-                            f"Leaving position because of peaks {data_manager.symbol} {self.get_curr_datetime()}"
-                        )
-                        self.make_end_market_order(data_manager)
-                        data_manager.did_leave_position = True
-
-        def next(self) -> None:
-            curr_datetime = self.get_curr_datetime()
-
-            if (
-                get_start_datetime(self.today)
-                .shift(minutes=-1)
-                .datetime.replace(tzinfo=None)
-                <= curr_datetime
-                < get_start_datetime(self.today)
-                .shift(minutes=30)
-                .datetime.replace(tzinfo=None)
-                and self.data1.close[0] > 1
-            ):
-                self.enter_position()
-            # Checking if time is up for the day
-            if curr_datetime >= get_end_datetime(self.today).datetime.replace(
-                tzinfo=None
-            ):
-                self.check_end_position()
-                return
-
-            if CHECK_PEAKS:
-                self.check_peaks()
-
-        def get_size(
-            self, price: float, average_volume: int, cash: float, divider: int
-        ) -> int:
-            raise NotImplementedError()
-
-    if type == StrategyType.TEST:
-
-        class TestStrategy(BaseStrategy):
-            def buy_custom(
-                self, parent: Optional[bt.Order] = None, **kwargs: Any
-            ) -> bt.Order:
-                return self.buy(
-                    parent=parent,
-                    **kwargs,
-                )
-
-            def sell_custom(
-                self, parent: Optional[bt.Order] = None, **kwargs: Any
-            ) -> bt.Order:
-                return self.sell(
-                    parent=parent,
-                    **kwargs,
-                )
-
-            def get_price(self, price: float) -> float:
-                return price
-
-            def get_price_with_deviation(
-                self, price: float, order_type: OrderType
-            ) -> float:
-                if order_type == OrderType.LONG:
-                    return price * 1.005
-                else:
-                    return price * 0.995
-
-            def get_size(
-                self, price: float, average_volume: int, cash: float, divider: int
-            ) -> int:
-                size = min(
-                    average_volume // 2,
-                    int(cash * 0.99 // price // divider),
-                )
-                return size
-
-        return TestStrategy
-
-    class IBKRStrategy(BaseStrategy):
-        def should_start_trading(self, curr_datetime: dt.datetime) -> bool:
-            return self.data_ready
-
-        def get_price(self, price: float) -> float:
-            return float(D(price, precision=D("0.05")))
-
-        def get_price_with_deviation(
-            self,
-            price: float,
-            order_type: OrderType,
-        ) -> float:
-            if order_type == OrderType.LONG:
-                return float(D(price * 1.0005, precision=D("0.05")))
-            else:
-                return float(D(price * 0.9995, precision=D("0.05")))
-
-        def buy_custom(
-            self, parent: Optional[bt.Order] = None, **kwargs: Any
-        ) -> bt.Order:
-            return self.buy(
-                parentId=(
-                    parent.orderId
-                    if parent is not None and hasattr(parent, "orderId")
-                    else None
                 ),
-                **kwargs,
-            )
-
-        def sell_custom(
-            self, parent: Optional[bt.Order] = None, **kwargs: Any
-        ) -> bt.Order:
-            return self.sell(
-                parentId=(
-                    parent.orderId
-                    if parent is not None and hasattr(parent, "orderId")
-                    else None
+                quantity=quantity,
+            ),
+            Order(
+                id=randint(0, 1000000),
+                queue=Queue[Any](),
+                status=OrderStatus.SENT,
+                order_type=(
+                    OrderType.BUY if action == OrderType.SELL else OrderType.SELL
                 ),
-                **kwargs,
+                price=self.get_price(take_profit_limit_price),
+                quantity=quantity,
+            ),
+            Order(
+                id=randint(0, 1000000),
+                queue=Queue[Any](),
+                status=OrderStatus.SENT,
+                order_type=(
+                    OrderType.BUY if action == OrderType.SELL else OrderType.SELL
+                ),
+                price=self.get_price(stop_loss_limit_price),
+                quantity=quantity,
+            ),
+        )
+
+        if not self.fake_cash:
+            raise Exception("Fake cash is None")
+
+        if action == OrderType.BUY:
+            self.fake_cash -= (
+                float(
+                    average(
+                        [
+                            price_limit,
+                            self.get_price_with_deviation(price_limit, action),
+                        ]
+                    )
+                )
+                * quantity
+            )
+        else:
+            self.fake_cash += (
+                float(
+                    average(
+                        [
+                            price_limit,
+                            self.get_price_with_deviation(price_limit, action),
+                        ]
+                    )
+                )
+                * quantity
             )
 
-        def get_size(
-            self, price: float, average_volume: int, cash: float, divider: int
-        ) -> int:
-            raise NotImplementedError()
+        return orders
 
-    if type == StrategyType.PAPER:
-
-        class PaperStrategy(IBKRStrategy):
-            def get_size(
-                self, price: float, average_volume: int, cash: float, divider: int
-            ) -> int:
-                return min(
-                    average_volume // 2,
-                    int(cash - (1000000 - 40000) // float(price) // divider),
+    def check_orders(self) -> None:
+        for data_manager in self.data_managers:
+            if (
+                data_manager.initial_order is not None
+                and data_manager.limit_price_order is not None
+                and data_manager.limit_price_order.status is not OrderStatus.COMPLETED
+                and data_manager.stop_price_order is not None
+                and data_manager.stop_price_order.status is not OrderStatus.COMPLETED
+                and data_manager.market_order is None
+                and data_manager.position_size is not None
+                and data_manager.position_size != 0
+            ):
+                shares = int(
+                    min(
+                        data_manager.position_size,
+                        data_manager.data1["volume"].iloc[-1],
+                    )
                 )
+                if data_manager.initial_order.order_type == OrderType.BUY:
+                    if (
+                        data_manager.data1["close"].iloc[-1]
+                        >= data_manager.limit_price_order.price
+                    ):
+                        self.fake_cash += data_manager.data1["close"].iloc[-1] * shares
 
-        return PaperStrategy
+                        data_manager.position_size -= shares
+                        if data_manager.position_size == 0:
+                            logger.info(
+                                f"PROFIT LIMIT: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * shares: .2f}"
+                            )
+                            data_manager.limit_price_order.status = (
+                                OrderStatus.COMPLETED
+                            )
+                            data_manager.did_leave_position = True
+                        else:
+                            data_manager.limit_price_order.status = OrderStatus.PARTIAL
+                    elif (
+                        data_manager.data1["close"].iloc[-1]
+                        <= data_manager.stop_price_order.price
+                    ):
+                        self.fake_cash += data_manager.data1["close"].iloc[-1] * shares
 
-    if type == StrategyType.LIVE:
+                        data_manager.position_size -= shares
+                        if data_manager.position_size == 0:
+                            logger.info(
+                                f"STOP LOSS: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * shares: .2f}"
+                            )
+                            data_manager.limit_price_order.status = (
+                                OrderStatus.COMPLETED
+                            )
+                            data_manager.did_leave_position = True
+                        else:
+                            data_manager.limit_price_order.status = OrderStatus.PARTIAL
+                else:
+                    if (
+                        data_manager.data1["close"].iloc[-1]
+                        <= data_manager.limit_price_order.price
+                    ):
+                        self.fake_cash -= data_manager.data1["close"].iloc[-1] * shares
+                        data_manager.position_size -= shares
+                        if data_manager.position_size == 0:
+                            logger.info(
+                                f"PROFIT LIMIT: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * shares: .2f}"
+                            )
+                            data_manager.limit_price_order.status = (
+                                OrderStatus.COMPLETED
+                            )
+                            data_manager.did_leave_position = True
+                        else:
+                            data_manager.limit_price_order.status = OrderStatus.PARTIAL
+                    elif (
+                        data_manager.data1["close"].iloc[-1]
+                        >= data_manager.stop_price_order.price
+                    ):
+                        self.fake_cash -= data_manager.data1["close"].iloc[-1] * shares
+                        data_manager.position_size -= shares
+                        if data_manager.position_size == 0:
+                            logger.info(
+                                f"STOP LOSS: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * shares: .2f}"
+                            )
+                            data_manager.limit_price_order.status = (
+                                OrderStatus.COMPLETED
+                            )
+                            data_manager.did_leave_position = True
+                        else:
+                            data_manager.limit_price_order.status = OrderStatus.PARTIAL
 
-        class RealStrategy(IBKRStrategy):
-            def get_size(
-                self, price: float, average_volume: int, cash: float, divider: int
-            ) -> int:
-                return min(
-                    average_volume // 2,
-                    int(min(cash, 5000) // float(price) // divider),
+    def make_end_market_order(self, data_manager: DataManager) -> None:
+        if not data_manager.initial_order or not data_manager.position_size:
+            raise Exception("Initial order is None")
+        data_manager.market_order = Order(
+            id=randint(0, 1000000),
+            queue=Queue[Any](),
+            status=OrderStatus.COMPLETED,
+            order_type=(
+                OrderType.BUY
+                if data_manager.initial_order.order_type == OrderType.SELL
+                else OrderType.SELL
+            ),
+            price=data_manager.data1["close"].iloc[-1],
+            quantity=data_manager.position_size,
+        )
+        if data_manager.initial_order.order_type == OrderType.BUY:
+            logger.info(
+                f"Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.position_size: .2f}"
+            )
+            self.fake_cash += (
+                data_manager.data1["close"].iloc[-1] * data_manager.position_size
+            )
+        else:
+            logger.info(
+                f"Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
+            )
+            self.fake_cash -= (
+                data_manager.data1["close"].iloc[-1] * data_manager.position_size
+            )
+        data_manager.position_size = 0
+        data_manager.did_leave_position = True
+
+    def get_price(self, price: float) -> float:
+        return price
+
+    def get_price_with_deviation(self, price: float, order_type: OrderType) -> float:
+        if order_type == OrderType.BUY:
+            return price * 1.001
+        else:
+            return price * 0.999
+
+
+class PaperStrategy(BaseStrategy):
+
+    def get_curr_datetime(self) -> datetime:
+        return arrow.now(tz=TIMEZONE).datetime
+
+    def should_start_trading(self, data_manager: DataManager) -> bool:
+        curr_datetime = data_manager.data1.index[-1]
+        return (
+            get_start_datetime(self.today).shift(minutes=-1).datetime
+            <= curr_datetime
+            < get_start_datetime(self.today).shift(minutes=30).datetime
+            and get_start_datetime(self.today).shift(minutes=-1).datetime
+            <= arrow.now(tz="US/Eastern").datetime
+            < get_start_datetime(self.today).shift(minutes=30).datetime
+        )
+
+    def get_size(
+        self, price: float, average_volume: float, cash: float, divider: int
+    ) -> int:
+        size = min(
+            int(average_volume // 2),
+            int(min(cash * 0.99, 5000) // price // divider),
+        )
+        return size
+
+    def get_cash(self) -> float:
+        cash = self.ibwrapper.get_account_usd_blocking()
+        after_subtraction = cash - 960000
+        if cash < 0:
+            return cash
+        else:
+            return after_subtraction
+
+    def place_bracket_order(
+        self,
+        action: OrderType,
+        quantity: int,
+        price_limit: float,
+        take_profit_limit_price: float,
+        stop_loss_price: float,
+        stop_loss_limit_price: float,
+        parent_valid: datetime,
+        children_valid: datetime,
+        contract: Contract,
+    ) -> tuple[Order, Order, Order]:
+        price_limit = self.get_price_with_deviation(price_limit, action)
+        take_profit_limit_price = self.get_price(take_profit_limit_price)
+        stop_loss_price = self.get_price(stop_loss_price)
+        stop_loss_limit_price = self.get_price(stop_loss_limit_price)
+
+        return self.app.place_bracket_order(
+            action,
+            quantity,
+            price_limit,
+            take_profit_limit_price,
+            stop_loss_price,
+            stop_loss_limit_price,
+            parent_valid,
+            children_valid,
+            contract,
+        )
+
+    def check_orders(self) -> None:
+        for data_manager in self.data_managers:
+            if (
+                data_manager.initial_order is not None
+                and not data_manager.initial_order.queue.empty()
+            ):
+                data_manager.initial_order = data_manager.initial_order.queue.get()
+                if (
+                    data_manager.initial_order is not None
+                    and data_manager.initial_order.status == OrderStatus.COMPLETED
+                ):
+                    data_manager.position_size = data_manager.initial_order.quantity
+            if (
+                data_manager.limit_price_order is not None
+                and not data_manager.limit_price_order.queue.empty()
+            ):
+                data_manager.limit_price_order = (
+                    data_manager.limit_price_order.queue.get()
                 )
+                if (
+                    data_manager.limit_price_order is not None
+                    and data_manager.limit_price_order.status == OrderStatus.COMPLETED
+                ):
+                    data_manager.did_leave_position = True
+                    data_manager.position_size = 0
+            if (
+                data_manager.stop_price_order is not None
+                and not data_manager.stop_price_order.queue.empty()
+            ):
+                data_manager.stop_price_order = (
+                    data_manager.stop_price_order.queue.get()
+                )
+                if (
+                    data_manager.stop_price_order is not None
+                    and data_manager.stop_price_order.status == OrderStatus.COMPLETED
+                ):
+                    data_manager.did_leave_position = True
+                    data_manager.position_size = 0
 
-        return RealStrategy
+    def make_end_market_order(self, data_manager: DataManager) -> None:
+        if (
+            data_manager.initial_order is None
+            or data_manager.limit_price_order is None
+            or data_manager.stop_price_order is None
+            or data_manager.position_size is None
+        ):
+            raise Exception("Initial order is None")
+        logger.info(
+            f"Making end market order for {data_manager.symbol} {data_manager.data1['close'].iloc[-1]}"
+        )
+        self.app.cancelOrder(data_manager.limit_price_order.id, "")
+        self.app.cancelOrder(data_manager.stop_price_order.id, "")
+        contract = self.ibwrapper.get_contract(data_manager.symbol)
+        if data_manager.initial_order.order_type == OrderType.BUY:
+            data_manager.market_order = self.app.place_order(
+                contract,
+                action=OrderType.SELL,
+                orderType="LMT",
+                totalQuantity=abs(data_manager.position_size),
+                lmtPrice=self.get_price_with_deviation(
+                    data_manager.data1["close"].iloc[-1], OrderType.SELL
+                ),
+            )
+        else:
+            data_manager.market_order = self.app.place_order(
+                contract,
+                action=OrderType.BUY,
+                orderType="LMT",
+                totalQuantity=abs(data_manager.position_size),
+                lmtPrice=self.get_price_with_deviation(
+                    data_manager.data1["close"].iloc[-1], OrderType.BUY
+                ),
+            )
+
+    def get_price(self, price: float) -> float:
+        return float(D(price, precision=D("0.05")))
+
+    def get_price_with_deviation(
+        self,
+        price: float,
+        order_type: OrderType,
+    ) -> float:
+        if order_type == OrderType.BUY:
+            return float(D(max(price * 1.001, price + 0.03), precision=D("0.05")))
+        else:
+            return float(D(min(price * 0.999, price - 0.03), precision=D("0.05")))

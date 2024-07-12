@@ -13,12 +13,12 @@ from models.math import Extremum
 
 class Evaluation(BaseModel):
     timestamp: datetime
-    symbol: str
+    ticker: str
     exchange: Optional[str] = None
     url: str
 
     def get_csv_directory_path(self) -> str:
-        return f"data/stocks/{self.symbol}"
+        return f"data/stocks/{self.ticker}"
 
     def create_csv_path(self, start_date: datetime, end_date: datetime) -> str:
         return f"{self.get_csv_directory_path()}/{arrow.get(start_date).format('YYYYMMDDHHmmss')}-{arrow.get(end_date).format('YYYYMMDDHHmmss')}.csv"
@@ -91,7 +91,7 @@ class Evaluation(BaseModel):
             pass
 
         if len(list(self.get_all_existing_csv_files())) >= 2:
-            raise Exception(f"Invalid and valid at the same time {self.symbol}")
+            raise Exception(f"Invalid and valid at the same time {self.ticker}")
 
     def _get_relevant_data(
         self,
@@ -200,19 +200,3 @@ class Evaluation(BaseModel):
             replaced = False
         if not was_ever_replaced:
             self._save_new_csv(df, start_date, end_date)
-
-
-class TestEvaluationResults(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    evaluation: Evaluation
-    df: DataFrame
-
-
-class EvaluationResults(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    evaluation: Evaluation
-    data: list[Extremum]
-    df: DataFrame
-    duration: int
