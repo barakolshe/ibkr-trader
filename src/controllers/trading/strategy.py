@@ -956,7 +956,7 @@ class PaperStrategy(BaseStrategy):
         self, price: float, average_volume: float, cash: float, divider: int
     ) -> int:
         size = min(
-            average_volume,
+            int(average_volume),
             int(min(cash * 0.99, 5000) // price // divider),
         )
         return size
