@@ -1,3 +1,4 @@
+from decimal import Decimal
 from queue import Queue
 from random import randint
 from threading import Thread
@@ -50,6 +51,7 @@ class DataManager(BaseModel):
     historic_queue: Queue[Any]
     live_queue: Optional[Queue[Any]] = None
     symbol: str
+    min_tick: Decimal
 
     initial_order: Optional[Order] = None
     limit_price_order: Optional[Order] = None
@@ -187,6 +189,7 @@ class BaseStrategy:
                 columns=["open", "high", "low", "close", "volume", "wap"]
             )
             empty_df.index = pd.to_datetime(empty_df.index)
+            min_tick = self.ibwrapper.get_min_tick_blocking(evaluation)
             self.data_managers.append(
                 DataManager(
                     is_testing=self.is_testing,
@@ -200,6 +203,7 @@ class BaseStrategy:
                         else None
                     ),
                     realdata=empty_df,
+                    min_tick=min_tick if min_tick is not None else D("0.01"),
                 )
             )
         self.iterate_queues()
@@ -344,10 +348,12 @@ class BaseStrategy:
     def get_cash(self) -> float:
         raise NotImplementedError()
 
-    def get_price(self, price: float) -> float:
-        raise NotImplementedError()
+    def get_price(self, price: float, precision: Decimal) -> float:
+        return float(D(price, precision=precision))
 
-    def get_price_with_deviation(self, price: float, order_type: OrderType) -> float:
+    def get_price_with_deviation(
+        self, price: float, order_type: OrderType, precision: Decimal
+    ) -> float:
         raise NotImplementedError()
 
     def get_close_gap_percentage(self, data_manager: DataManager) -> float:
@@ -551,6 +557,7 @@ class BaseStrategy:
                     data_manager.limit_price_order,
                     data_manager.stop_price_order,
                 ) = self.place_bracket_order(
+                    data_manager,
                     action=OrderType.BUY,
                     quantity=size,
                     price_limit=data_manager.data1["close"].iloc[-1],
@@ -575,6 +582,7 @@ class BaseStrategy:
                     data_manager.limit_price_order,
                     data_manager.stop_price_order,
                 ) = self.place_bracket_order(
+                    data_manager,
                     action=OrderType.SELL,
                     quantity=size,
                     price_limit=data_manager.data1["close"].iloc[-1],
@@ -671,6 +679,7 @@ class BaseStrategy:
 
     def place_bracket_order(
         self,
+        data_manager: DataManager,
         action: OrderType,
         quantity: int,
         price_limit: float,
@@ -728,6 +737,7 @@ class TestStrategy(BaseStrategy):
 
     def place_bracket_order(
         self,
+        data_manager: DataManager,
         action: OrderType,
         quantity: int,
         price_limit: float,
@@ -749,7 +759,9 @@ class TestStrategy(BaseStrategy):
                     average(
                         [
                             price_limit,
-                            self.get_price_with_deviation(price_limit, action),
+                            self.get_price_with_deviation(
+                                price_limit, action, precision=data_manager.min_tick
+                            ),
                         ]
                     )
                 ),
@@ -762,7 +774,9 @@ class TestStrategy(BaseStrategy):
                 order_type=(
                     OrderType.BUY if action == OrderType.SELL else OrderType.SELL
                 ),
-                price=self.get_price(take_profit_limit_price),
+                price=self.get_price(
+                    take_profit_limit_price, precision=data_manager.min_tick
+                ),
                 quantity=quantity,
             ),
             Order(
@@ -772,7 +786,9 @@ class TestStrategy(BaseStrategy):
                 order_type=(
                     OrderType.BUY if action == OrderType.SELL else OrderType.SELL
                 ),
-                price=self.get_price(stop_loss_limit_price),
+                price=self.get_price(
+                    stop_loss_limit_price, precision=data_manager.min_tick
+                ),
                 quantity=quantity,
             ),
         )
@@ -786,7 +802,9 @@ class TestStrategy(BaseStrategy):
                     average(
                         [
                             price_limit,
-                            self.get_price_with_deviation(price_limit, action),
+                            self.get_price_with_deviation(
+                                price_limit, action, precision=data_manager.min_tick
+                            ),
                         ]
                     )
                 )
@@ -798,7 +816,9 @@ class TestStrategy(BaseStrategy):
                     average(
                         [
                             price_limit,
-                            self.get_price_with_deviation(price_limit, action),
+                            self.get_price_with_deviation(
+                                price_limit, action, precision=data_manager.min_tick
+                            ),
                         ]
                     )
                 )
@@ -926,14 +946,13 @@ class TestStrategy(BaseStrategy):
         data_manager.position_size = 0
         data_manager.did_leave_position = True
 
-    def get_price(self, price: float) -> float:
-        return price
-
-    def get_price_with_deviation(self, price: float, order_type: OrderType) -> float:
+    def get_price_with_deviation(
+        self, price: float, order_type: OrderType, precision: Decimal
+    ) -> float:
         if order_type == OrderType.BUY:
-            return price * 1.001
+            return self.get_price(price * 1.001, precision=precision)
         else:
-            return price * 0.999
+            return self.get_price(price * 0.999, precision=precision)
 
 
 class PaperStrategy(BaseStrategy):
@@ -971,6 +990,7 @@ class PaperStrategy(BaseStrategy):
 
     def place_bracket_order(
         self,
+        data_manager: DataManager,
         action: OrderType,
         quantity: int,
         price_limit: float,
@@ -981,10 +1001,18 @@ class PaperStrategy(BaseStrategy):
         children_valid: datetime,
         contract: Contract,
     ) -> tuple[Order, Order, Order]:
-        price_limit = self.get_price_with_deviation(price_limit, action)
-        take_profit_limit_price = self.get_price(take_profit_limit_price)
-        stop_loss_price = self.get_price(stop_loss_price)
-        stop_loss_limit_price = self.get_price(stop_loss_limit_price)
+        price_limit = self.get_price_with_deviation(
+            price_limit, action, precision=data_manager.min_tick
+        )
+        take_profit_limit_price = self.get_price(
+            take_profit_limit_price, precision=data_manager.min_tick
+        )
+        stop_loss_price = self.get_price(
+            stop_loss_price, precision=data_manager.min_tick
+        )
+        stop_loss_limit_price = self.get_price(
+            stop_loss_limit_price, precision=data_manager.min_tick
+        )
 
         return self.app.place_bracket_order(
             action,
@@ -1058,7 +1086,9 @@ class PaperStrategy(BaseStrategy):
                 orderType="LMT",
                 totalQuantity=abs(data_manager.position_size),
                 lmtPrice=self.get_price_with_deviation(
-                    data_manager.data1["close"].iloc[-1], OrderType.SELL
+                    data_manager.data1["close"].iloc[-1],
+                    OrderType.SELL,
+                    data_manager.min_tick,
                 ),
             )
         else:
@@ -1068,19 +1098,16 @@ class PaperStrategy(BaseStrategy):
                 orderType="LMT",
                 totalQuantity=abs(data_manager.position_size),
                 lmtPrice=self.get_price_with_deviation(
-                    data_manager.data1["close"].iloc[-1], OrderType.BUY
+                    data_manager.data1["close"].iloc[-1],
+                    OrderType.BUY,
+                    data_manager.min_tick,
                 ),
             )
 
-    def get_price(self, price: float) -> float:
-        return float(D(price, precision=D("0.05")))
-
     def get_price_with_deviation(
-        self,
-        price: float,
-        order_type: OrderType,
+        self, price: float, order_type: OrderType, precision: Decimal
     ) -> float:
         if order_type == OrderType.BUY:
-            return float(D(max(price * 1.001, price + 0.03), precision=D("0.05")))
+            return self.get_price(max(price * 1.001, price + 0.03), precision=precision)
         else:
-            return float(D(min(price * 0.999, price - 0.03), precision=D("0.05")))
+            return self.get_price(min(price * 0.999, price - 0.03), precision=precision)

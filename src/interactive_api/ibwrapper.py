@@ -81,3 +81,16 @@ class IBWrapper:
         contract.currency = currency
 
         return contract
+
+    def get_min_tick_blocking(self, evaluation: Evaluation) -> Optional[Decimal]:
+        contract = self.get_contract(evaluation.ticker, exchange=evaluation.exchange)
+        queue = self.app.req_contract_details(contract)
+        min_tick: Optional[Decimal] = None
+        response: Any = ""
+        while response is not None:
+            response = queue.get()
+            if response is None:
+                break
+            min_tick = D(response.minTick)
+
+        return min_tick

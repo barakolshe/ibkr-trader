@@ -60,7 +60,7 @@ def live_trade() -> None:
     strategy.main_loop(filtered_evaluations)
 
 
-if __name__ == "__main__":
+def live_trade_loop() -> None:
     while True:
         now_date = arrow.now(tz="US/Eastern")
         days_shift = 7 - now_date.weekday() if now_date.weekday() > 5 else 1
@@ -72,3 +72,7 @@ if __name__ == "__main__":
         if check_kill_all_command():
             break
         live_trade()
+
+
+if __name__ == "__main__":
+    live_trade_loop()

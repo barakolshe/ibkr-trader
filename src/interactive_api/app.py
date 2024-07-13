@@ -59,6 +59,25 @@ class IBapi(EWrapper, EClient):  # type: ignore
     def insert_to_queue(self, data: Any, queue: Queue[Any]) -> None:
         queue.put(data)
 
+    def req_contract_details(self, contract: Contract) -> Queue[Any]:
+        queue = Queue[Any]()
+        req_id = self.nextValidOrderId
+        self.nextValidOrderId += 1
+        self.queues_mappings[req_id] = queue
+        self.reqContractDetails(req_id, contract)
+
+        return queue
+
+    def contractDetails(self, reqId: int, contractDetails: Any) -> None:
+        self.logAnswer(current_fn_name(), vars())
+        queue = self.queues_mappings[reqId]
+        self.insert_to_queue(contractDetails, queue)
+
+    def contractDetailsEnd(self, reqId: int) -> None:
+        self.logAnswer(current_fn_name(), vars())
+        queue = self.queues_mappings[reqId]
+        self.insert_to_queue(None, queue)
+
     def req_historical_data(
         self,
         contract: Contract,
