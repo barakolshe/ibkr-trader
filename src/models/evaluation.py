@@ -8,13 +8,11 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict
 import os
 
-from models.math import Extremum
-
 
 class Evaluation(BaseModel):
     timestamp: datetime
     ticker: str
-    exchange: Optional[str] = None
+    exchange: str
     url: str
 
     def get_csv_directory_path(self) -> str:

@@ -25,10 +25,12 @@ def live_trade() -> None:
         if compare_dates(arrow.now(tz=TIMEZONE), arrow.get(evaluation.timestamp))
     ]
     strategy = PaperStrategy(
-        arrow.now(tz=TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
+        arrow.now(tz=TIMEZONE)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .datetime
     )
     strategy.main_loop(filtered_evaluations)
 
 
 if __name__ == "__main__":
-    live_trade()
+    test_strategy()

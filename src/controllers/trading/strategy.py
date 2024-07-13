@@ -12,6 +12,7 @@ from consts.time_consts import TIMEZONE
 from consts.trading_consts import (
     CHECK_PEAKS,
     CHOSEN_STOCKS_AMOUNT,
+    CLOSE_GAP_MULTIPLIER_THRESHOLD,
     MINIMUM_SHARE_PRICE,
     PEAK_PRICE_THRESHOLD,
     STOP_LOSS,
@@ -43,6 +44,7 @@ def interpolate_volume(volume: float, min_volume: int, max_volume: int) -> float
 
 class DataManager(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
+    is_testing: bool = False
 
     historic_queue: Queue[Any]
     live_queue: Optional[Queue[Any]] = None
@@ -76,7 +78,9 @@ class DataManager(BaseModel):
                 "wap": "mean",
             }
         )
-        return complete_missing_minutes(df, "1min")
+        if not self.is_testing:
+            df = complete_missing_minutes(df, "1min")
+        return df
 
     @property
     def data3(self) -> DataFrame:
@@ -90,7 +94,9 @@ class DataManager(BaseModel):
                 "wap": "mean",
             }
         )
-        return complete_missing_minutes(df, "3min")
+        if not self.is_testing:
+            df = complete_missing_minutes(df, "3min")
+        return df
 
     @property
     def data5(self) -> DataFrame:
@@ -104,7 +110,9 @@ class DataManager(BaseModel):
                 "wap": "mean",
             }
         )
-        return complete_missing_minutes(df, "5min")
+        if not self.is_testing:
+            df = complete_missing_minutes(df, "5min")
+        return df
 
     is_finished: bool = False
 
@@ -120,13 +128,13 @@ def complete_missing_minutes(df: DataFrame, freq: str) -> DataFrame:
     df = df.reindex(complete_index)
 
     # Forward fill the OHLC values with the last known 'Close' price
-    df["close"] = df["close"].ffill()
-    df["open"] = df["open"].fillna(df["close"]).infer_objects(copy=False)  # type: ignore
-    df["high"] = df["high"].fillna(df["close"]).infer_objects(copy=False)  # type: ignore
-    df["low"] = df["low"].fillna(df["close"]).infer_objects(copy=False)  # type: ignore
+    df["close"] = df["close"].infer_objects().ffill()
+    df["open"] = df["open"].infer_objects().fillna(df["close"])
+    df["high"] = df["high"].infer_objects().fillna(df["close"])
+    df["low"] = df["low"].infer_objects().fillna(df["close"])
 
     # Set missing 'Volume' to 0
-    df["volume"] = df["volume"].fillna(0).infer_objects(copy=False)  # type: ignore
+    df["volume"] = df["volume"].infer_objects().fillna(0)
 
     # Calculate VWAP for the filled rows
     df["vwap"] = (
@@ -179,6 +187,7 @@ class BaseStrategy:
             empty_df.index = pd.to_datetime(empty_df.index)
             self.data_managers.append(
                 DataManager(
+                    is_testing=self.is_testing,
                     symbol=evaluation.ticker,
                     historic_queue=self.ibwrapper.get_historical_data(
                         evaluation, self.today
@@ -206,8 +215,9 @@ class BaseStrategy:
                 ]
             ):
                 for data_manager in self.data_managers:
-                    if data_manager.realdata.empty:
-                        continue
+                    data_manager.realdata = complete_missing_minutes(
+                        data_manager.realdata, "1min"
+                    )
                 return
             while not all(
                 [data_manager.is_finished for data_manager in self.data_managers]
@@ -282,7 +292,7 @@ class BaseStrategy:
             )
         )
 
-    def get_curr_datetime(self) -> datetime:
+    def get_curr_datetime(self) -> Optional[datetime]:
         raise NotImplementedError()
 
     def trade(self) -> None:
@@ -301,13 +311,13 @@ class BaseStrategy:
             self.check_end_position()
             return
 
-        if self.should_enter_position():
+        if self.should_enter_position(curr_datetime):
             self.enter_position()
             return
+
         for data_manager in self.data_managers:
             if data_manager.data1.empty:
                 continue
-            curr_datetime = data_manager.data1.index[-1]
 
             if (
                 self.should_start_trading(data_manager)
@@ -388,12 +398,11 @@ class BaseStrategy:
         filtered_df["high_low_diff"] = filtered_df["high"] - filtered_df["low"]
         absolute_gap = filtered_df["high_low_diff"].sum(skipna=True)
 
-        # TODO: Revert this
-        # if absolute_gap > abs(data_manager.close_gap) * CLOSE_GAP_MULTIPLIER_THRESHOLD:
-        #     log_important(
-        #         f"Not trading {data_manager.symbol} because of absolute gap", "info"
-        #     )
-        #     return False
+        if absolute_gap > abs(data_manager.close_gap) * CLOSE_GAP_MULTIPLIER_THRESHOLD:
+            log_important(
+                f"Not trading {data_manager.symbol} because of absolute gap", "info"
+            )
+            return False
 
         data_manager.absolute_gap = abs(data_manager.close_gap) / absolute_gap
         return True
@@ -661,16 +670,17 @@ class BaseStrategy:
 
 class TestStrategy(BaseStrategy):
 
-    def get_curr_datetime(self) -> datetime:
-        datetimes = []
+    def get_curr_datetime(self) -> Optional[datetime]:
+        datetimes: list[datetime] = []
         for data_manager in self.data_managers:
             try:
                 datetimes.append(data_manager.data1.index[-1])
             except:
                 continue
         if len(datetimes) == 0:
-            return
+            return None
         curr_datetime = max(datetimes)
+        return curr_datetime
 
     def should_start_trading(self, data_manager: DataManager) -> bool:
         curr_datetime: datetime = data_manager.data1.index[-1]
@@ -906,7 +916,7 @@ class TestStrategy(BaseStrategy):
 
 class PaperStrategy(BaseStrategy):
 
-    def get_curr_datetime(self) -> datetime:
+    def get_curr_datetime(self) -> Optional[datetime]:
         return arrow.now(tz=TIMEZONE).datetime
 
     def should_start_trading(self, data_manager: DataManager) -> bool:

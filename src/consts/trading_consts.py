@@ -11,11 +11,11 @@ def get_analysis_start_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
 
 
 def get_start_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
-    return arrow.get(date).replace(hour=13, minute=40, second=0)  # TODO: Revert this
+    return arrow.get(date).replace(hour=11, minute=0, second=0)
 
 
 def get_end_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
-    return arrow.get(date).replace(hour=13, minute=50, second=0)  # TODO: Revert this
+    return arrow.get(date).replace(hour=15, minute=0, second=0)
 
 
 STOP_LOSS = 0.02

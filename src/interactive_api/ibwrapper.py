@@ -26,7 +26,7 @@ class IBWrapper:
         logger.info(
             f"Getting historical data for: {evaluation.ticker} {evaluation.timestamp.date()}"
         )
-        contract = self.get_contract(evaluation.ticker)
+        contract = self.get_contract(evaluation.ticker, exchange=evaluation.exchange)
 
         endDate = f"{arrow.get(date, tzinfo=TIMEZONE).replace(hour=16, minute=0, second=0).format(DATETIME_FORMATTING)} {TIMEZONE}"
         queue = self.app.req_historical_data(
