@@ -62,14 +62,10 @@ def live_trade() -> None:
 
 if __name__ == "__main__":
     while True:
-        days_shift = (
-            7 - arrow.now(tz="US/Eastern").weekday()
-            if arrow.now(tz="US/Eastern").weekday() > 5
-            else 1
-        )
+        now_date = arrow.now(tz="US/Eastern")
+        days_shift = 7 - now_date.weekday() if now_date.weekday() > 5 else 1
         sleep_until(
-            arrow.now(tz="US/Eastern")
-            .shift(day=days_shift)
+            now_date.shift(days=days_shift)
             .replace(hour=10, minute=45, second=0)
             .datetime
         )
