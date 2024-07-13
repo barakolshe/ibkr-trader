@@ -3,7 +3,7 @@ import arrow
 
 
 def get_volume_analysis_start_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
-    return arrow.get(date).replace(hour=10, minute=0, second=0)
+    return arrow.get(date).replace(hour=9, minute=45, second=0)
 
 
 def get_analysis_start_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:

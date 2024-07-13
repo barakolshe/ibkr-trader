@@ -5,6 +5,13 @@ from pymongo import MongoClient
 from models.evaluation import Evaluation
 
 
+def transform_exchange(exchange: str) -> str:
+    if exchange == "NASDAQ":
+        return "ISLAND"
+
+    return exchange
+
+
 def get_actions(exchanges: list[str], all: bool) -> list[Evaluation]:
     username = os.environ.get("MONGODB_USERNAME")
     password = os.environ.get("MONGODB_PASSWORD")
@@ -37,7 +44,7 @@ def get_actions(exchanges: list[str], all: bool) -> list[Evaluation]:
     return [
         Evaluation(
             ticker=doc["ticker"],
-            exchange=doc["exchange"],
+            exchange=transform_exchange(doc["exchange"]),
             timestamp=doc["date"],
             url=doc["url"],
         )

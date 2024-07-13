@@ -28,7 +28,7 @@ from interactive_api.app import IBapi, OrderStatus, OrderType
 from interactive_api.ibwrapper import IBWrapper
 from models.evaluation import Evaluation
 from logger.logger import logger, log_important
-from datetime import timedelta, datetime, tzinfo
+from datetime import timedelta, datetime
 from interactive_api.app import Order
 from utils.math_utils import D
 
@@ -68,6 +68,8 @@ class DataManager(BaseModel):
 
     @property
     def data1(self) -> DataFrame:
+        if self.is_testing:
+            return self.realdata
         df = self.realdata.resample("1min").agg(
             {
                 "open": "first",
@@ -78,8 +80,7 @@ class DataManager(BaseModel):
                 "wap": "mean",
             }
         )
-        if not self.is_testing:
-            df = complete_missing_minutes(df, "1min")
+        df = complete_missing_minutes(df, "1min")
         return df
 
     @property
@@ -215,6 +216,8 @@ class BaseStrategy:
                 ]
             ):
                 for data_manager in self.data_managers:
+                    if data_manager.realdata.empty:
+                        continue
                     data_manager.realdata = complete_missing_minutes(
                         data_manager.realdata, "1min"
                     )
@@ -275,6 +278,8 @@ class BaseStrategy:
                             curr_datetime
                         ]
                 curr_datetime += timedelta(minutes=1)
+                if self.get_curr_datetime() is None:
+                    continue
                 self.trade()
         else:
             while arrow.now(tz=TIMEZONE).hour < 16:
@@ -369,7 +374,7 @@ class BaseStrategy:
     def get_average_volume(self, data_manager: DataManager) -> float:
         average_volume = float(
             float(
-                median(
+                average(
                     data_manager.data1.loc[
                         get_volume_analysis_start_datetime(self.today).datetime :,  # type: ignore
                         "volume",
@@ -404,6 +409,8 @@ class BaseStrategy:
             )
             return False
 
+        if absolute_gap == 0:
+            return False
         data_manager.absolute_gap = abs(data_manager.close_gap) / absolute_gap
         return True
 
@@ -435,7 +442,15 @@ class BaseStrategy:
                 exc_info=True,
             )
             data_manager.average_volume = 0
-        if data_manager.average_volume is None:
+        if (
+            data_manager.average_volume is None
+            or interpolate_volume(
+                data_manager.average_volume,
+                int(self.cash // (CHOSEN_STOCKS_AMOUNT * 2)),
+                int(self.cash // CHOSEN_STOCKS_AMOUNT),
+            )
+            == 0
+        ):
             data_manager.score = 0
             return
         data_manager.close_gap = self.get_close_gap_difference(
@@ -694,7 +709,7 @@ class TestStrategy(BaseStrategy):
         self, price: float, average_volume: float, cash: float, divider: int
     ) -> int:
         size = min(
-            int(average_volume // 2),
+            int(average_volume),
             int(cash * 0.99 // price // divider),
         )
         return size
@@ -896,7 +911,7 @@ class TestStrategy(BaseStrategy):
             )
         else:
             logger.info(
-                f"Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
+                f"Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
             )
             self.fake_cash -= (
                 data_manager.data1["close"].iloc[-1] * data_manager.position_size
