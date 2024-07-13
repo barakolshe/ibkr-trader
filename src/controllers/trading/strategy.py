@@ -12,7 +12,6 @@ from consts.time_consts import TIMEZONE
 from consts.trading_consts import (
     CHECK_PEAKS,
     CHOSEN_STOCKS_AMOUNT,
-    CLOSE_GAP_MULTIPLIER_THRESHOLD,
     MINIMUM_SHARE_PRICE,
     PEAK_PRICE_THRESHOLD,
     STOP_LOSS,
@@ -312,7 +311,6 @@ class BaseStrategy:
 
             if (
                 self.should_start_trading(data_manager)
-                and data_manager.data1["close"].iloc[-1] > MINIMUM_SHARE_PRICE
                 and data_manager.average_volume is None
             ):
                 self.get_stats(data_manager)
@@ -417,6 +415,9 @@ class BaseStrategy:
         return
 
     def get_stats(self, data_manager: DataManager) -> None:
+        if data_manager.data1["close"].iloc[-1] <= MINIMUM_SHARE_PRICE:
+            data_manager.score = 0
+            return
         try:
             data_manager.average_volume = self.get_average_volume(data_manager)
         except Exception:
