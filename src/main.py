@@ -9,6 +9,8 @@ from controllers.trading.strategy import PaperStrategy
 from controllers.trading.trader import BaseTrader, compare_dates
 import arrow
 import boto3
+from logger.logger import logger
+
 
 US_EXCHANGES = ["NYSE", "NASDAQ", "AMEX", "NYSEA"]
 AMAZON_BUCKET_NAME: str = "barak-trading-bucket"
@@ -61,6 +63,7 @@ def live_trade() -> None:
 
 
 def live_trade_loop() -> None:
+    logger.info("Running")
     while True:
         now_date = arrow.now(tz="US/Eastern")
         days_shift = 7 - now_date.weekday() if now_date.weekday() > 5 else 1
