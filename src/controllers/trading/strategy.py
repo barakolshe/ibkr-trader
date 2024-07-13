@@ -14,6 +14,7 @@ from consts.trading_consts import (
     CHOSEN_STOCKS_AMOUNT,
     CLOSE_GAP_MULTIPLIER_THRESHOLD,
     MINIMUM_SHARE_PRICE,
+    MINIMUM_VOLUME_MULTIPLIER,
     PEAK_PRICE_THRESHOLD,
     STOP_LOSS,
     TARGET_PROFIT,
@@ -446,7 +447,7 @@ class BaseStrategy:
             data_manager.average_volume is None
             or interpolate_volume(
                 data_manager.average_volume,
-                int(self.cash // (CHOSEN_STOCKS_AMOUNT * 2)),
+                int(self.cash // (CHOSEN_STOCKS_AMOUNT * MINIMUM_VOLUME_MULTIPLIER)),
                 int(self.cash // CHOSEN_STOCKS_AMOUNT),
             )
             == 0
@@ -473,7 +474,10 @@ class BaseStrategy:
                     * data_manager.absolute_gap
                     * interpolate_volume(
                         data_manager.average_volume,
-                        int(self.cash // (CHOSEN_STOCKS_AMOUNT * 2)),
+                        int(
+                            self.cash
+                            // (CHOSEN_STOCKS_AMOUNT * MINIMUM_VOLUME_MULTIPLIER)
+                        ),
                         int(self.cash // CHOSEN_STOCKS_AMOUNT),
                     )
                     * 100
@@ -494,7 +498,10 @@ class BaseStrategy:
                     * data_manager.absolute_gap
                     * interpolate_volume(
                         data_manager.average_volume,
-                        int(self.cash // (CHOSEN_STOCKS_AMOUNT * 2)),
+                        int(
+                            self.cash
+                            // (CHOSEN_STOCKS_AMOUNT * MINIMUM_VOLUME_MULTIPLIER)
+                        ),
                         int(self.cash // CHOSEN_STOCKS_AMOUNT),
                     )
                     * 100
@@ -949,7 +956,7 @@ class PaperStrategy(BaseStrategy):
         self, price: float, average_volume: float, cash: float, divider: int
     ) -> int:
         size = min(
-            int(average_volume // 2),
+            average_volume,
             int(min(cash * 0.99, 5000) // price // divider),
         )
         return size
