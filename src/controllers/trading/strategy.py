@@ -420,7 +420,6 @@ class BaseStrategy:
                 data_manager.did_leave_position
                 or data_manager.market_order is not None
                 or data_manager.initial_order is None
-                or data_manager.initial_order.status not in [OrderStatus.COMPLETED]
                 or data_manager.limit_price_order.status in [OrderStatus.COMPLETED]  # type: ignore
                 or data_manager.stop_price_order.status in [OrderStatus.COMPLETED]  # type: ignore
                 or data_manager.position_size == 0
@@ -544,6 +543,7 @@ class BaseStrategy:
                     data_manager.limit_price_order,
                     data_manager.stop_price_order,
                 ) = self.place_bracket_order(
+                    data_manager,
                     action=OrderType.BUY,
                     quantity=size,
                     price_limit=data_manager.data1["close"].iloc[-1],
@@ -568,6 +568,7 @@ class BaseStrategy:
                     data_manager.limit_price_order,
                     data_manager.stop_price_order,
                 ) = self.place_bracket_order(
+                    data_manager,
                     action=OrderType.SELL,
                     quantity=size,
                     price_limit=data_manager.data1["close"].iloc[-1],
@@ -591,8 +592,8 @@ class BaseStrategy:
         for data_manager in self.data_managers:
             if (
                 not data_manager.initial_order
-                or not data_manager.initial_order.status == OrderStatus.COMPLETED
                 or data_manager.did_leave_position
+                or data_manager.position_size == 0
             ):
                 continue
             if data_manager.close_gap is not None and data_manager.close_gap > 0:
@@ -664,6 +665,7 @@ class BaseStrategy:
 
     def place_bracket_order(
         self,
+        data_manager: DataManager,
         action: OrderType,
         quantity: int,
         price_limit: float,
@@ -721,6 +723,7 @@ class TestStrategy(BaseStrategy):
 
     def place_bracket_order(
         self,
+        data_manager: DataManager,
         action: OrderType,
         quantity: int,
         price_limit: float,
@@ -736,16 +739,9 @@ class TestStrategy(BaseStrategy):
             Order(
                 id=randint(0, 1000000),
                 queue=Queue[Any](),
-                status=OrderStatus.COMPLETED,
+                status=OrderStatus.SENT,
                 order_type=action,
-                price=float(
-                    average(
-                        [
-                            price_limit,
-                            self.get_price_with_deviation(price_limit, action),
-                        ]
-                    )
-                ),
+                price=self.get_price_with_deviation(price_limit, action),
                 quantity=quantity,
             ),
             Order(
@@ -770,38 +766,45 @@ class TestStrategy(BaseStrategy):
             ),
         )
 
-        if not self.fake_cash:
-            raise Exception("Fake cash is None")
-
-        if action == OrderType.BUY:
-            self.fake_cash -= (
-                float(
-                    average(
-                        [
-                            price_limit,
-                            self.get_price_with_deviation(price_limit, action),
-                        ]
-                    )
-                )
-                * quantity
-            )
-        else:
-            self.fake_cash += (
-                float(
-                    average(
-                        [
-                            price_limit,
-                            self.get_price_with_deviation(price_limit, action),
-                        ]
-                    )
-                )
-                * quantity
-            )
+        data_manager.position_size = 0
 
         return orders
 
     def check_orders(self) -> None:
         for data_manager in self.data_managers:
+            if data_manager.position_size is None:
+                continue
+
+            if (
+                data_manager.initial_order is not None
+                and data_manager.initial_order.status is not OrderStatus.COMPLETED
+            ):
+                shares = int(
+                    min(
+                        data_manager.initial_order.quantity
+                        - data_manager.position_size,
+                        data_manager.data1["volume"].iloc[-1],
+                    )
+                )
+                if data_manager.initial_order.order_type == OrderType.BUY:
+                    if (
+                        data_manager.data1["close"].iloc[-1]
+                        <= data_manager.initial_order.price
+                    ):
+                        self.fake_cash -= data_manager.data1["close"].iloc[-1] * shares
+                        data_manager.position_size += shares
+                else:
+                    if (
+                        data_manager.data1["close"].iloc[-1]
+                        >= data_manager.initial_order.price
+                    ):
+                        self.fake_cash -= data_manager.data1["close"].iloc[-1] * shares
+                        data_manager.position_size += shares
+                if data_manager.position_size == data_manager.initial_order.quantity:
+                    logger.info(
+                        f"Filled initial order {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * shares: .2f}"
+                    )
+                    data_manager.initial_order.status = OrderStatus.COMPLETED
             if (
                 data_manager.initial_order is not None
                 and data_manager.limit_price_order is not None
@@ -809,7 +812,6 @@ class TestStrategy(BaseStrategy):
                 and data_manager.stop_price_order is not None
                 and data_manager.stop_price_order.status is not OrderStatus.COMPLETED
                 and data_manager.market_order is None
-                and data_manager.position_size is not None
                 and data_manager.position_size != 0
             ):
                 shares = int(
@@ -854,6 +856,12 @@ class TestStrategy(BaseStrategy):
                         else:
                             data_manager.limit_price_order.status = OrderStatus.PARTIAL
                 else:
+                    shares = int(
+                        min(
+                            data_manager.position_size,
+                            data_manager.data1["volume"].iloc[-1],
+                        )
+                    )
                     if (
                         data_manager.data1["close"].iloc[-1]
                         <= data_manager.limit_price_order.price
@@ -886,6 +894,30 @@ class TestStrategy(BaseStrategy):
                             data_manager.did_leave_position = True
                         else:
                             data_manager.limit_price_order.status = OrderStatus.PARTIAL
+            if (
+                data_manager.initial_order is not None
+                and data_manager.market_order is not None
+                and data_manager.market_order.status is not OrderStatus.COMPLETED
+                and data_manager.position_size is not None
+                and data_manager.position_size != 0
+            ):
+                shares = int(
+                    min(
+                        data_manager.position_size,
+                        data_manager.data1["volume"].iloc[-1],
+                    )
+                )
+                if data_manager.market_order.order_type == OrderType.BUY:
+                    self.fake_cash -= data_manager.data1["close"].iloc[-1] * shares
+                else:
+                    self.fake_cash += data_manager.data1["close"].iloc[-1] * shares
+                data_manager.position_size -= shares
+                if data_manager.position_size == 0:
+                    data_manager.market_order.status = OrderStatus.COMPLETED
+                    data_manager.did_leave_position = True
+                    logger.info(
+                        f"Filled market order {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * shares: .2f}"
+                    )
 
     def make_end_market_order(self, data_manager: DataManager) -> None:
         if not data_manager.initial_order or not data_manager.position_size:
@@ -893,7 +925,7 @@ class TestStrategy(BaseStrategy):
         data_manager.market_order = Order(
             id=randint(0, 1000000),
             queue=Queue[Any](),
-            status=OrderStatus.COMPLETED,
+            status=OrderStatus.SENT,
             order_type=(
                 OrderType.BUY
                 if data_manager.initial_order.order_type == OrderType.SELL
@@ -906,18 +938,10 @@ class TestStrategy(BaseStrategy):
             logger.info(
                 f"Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.position_size: .2f}"
             )
-            self.fake_cash += (
-                data_manager.data1["close"].iloc[-1] * data_manager.position_size
-            )
         else:
             logger.info(
                 f"Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
             )
-            self.fake_cash -= (
-                data_manager.data1["close"].iloc[-1] * data_manager.position_size
-            )
-        data_manager.position_size = 0
-        data_manager.did_leave_position = True
 
     def get_price(self, price: float) -> float:
         return price
@@ -964,6 +988,7 @@ class PaperStrategy(BaseStrategy):
 
     def place_bracket_order(
         self,
+        data_manager: DataManager,
         action: OrderType,
         quantity: int,
         price_limit: float,
