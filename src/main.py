@@ -16,11 +16,6 @@ US_EXCHANGES = ["NYSE", "NASDAQ", "AMEX", "NYSEA"]
 AMAZON_BUCKET_NAME: str = "barak-trading-bucket"
 
 
-def sleep_until(target_datetime: datetime) -> None:
-    diff = target_datetime - arrow.now(tz="US/Eastern").datetime
-    time.sleep(diff.total_seconds())
-
-
 def check_kill_all_command() -> bool:
     s3_client = boto3.client("s3")
     try:
@@ -38,6 +33,14 @@ def check_kill_all_command() -> bool:
         return True
     except:
         return False
+
+
+def sleep_until(target_datetime: arrow.Arrow) -> bool:
+    while arrow.now(tz="US/Eastern") < target_datetime:
+        time.sleep(30)
+        if check_kill_all_command():
+            return False
+    return True
 
 
 def test_strategy() -> None:
@@ -67,13 +70,10 @@ def live_trade_loop() -> None:
     while True:
         now_date = arrow.now(tz="US/Eastern")
         days_shift = 7 - now_date.weekday() if now_date.weekday() > 5 else 1
-        sleep_until(
-            now_date.shift(days=days_shift)
-            .replace(hour=10, minute=45, second=0)
-            .datetime
-        )
-        if check_kill_all_command():
-            break
+        if not sleep_until(
+            now_date.shift(days=days_shift).replace(hour=10, minute=45, second=0)
+        ):
+            return
         live_trade()
 
 
