@@ -167,7 +167,7 @@ class BaseStrategy:
         initial_cash: Optional[float] = None,
     ) -> None:
         self.app = IBapi()
-        self.app.connect("127.0.0.1", 7497, randint(1, 100))
+        self.app.connect("127.0.0.1", 4002, randint(1, 100))
         self.ib_app_thread = Thread(target=self.app.run, daemon=True)
         self.ib_app_thread.start()
         self.today = today
@@ -356,22 +356,34 @@ class BaseStrategy:
     ) -> float:
         raise NotImplementedError()
 
-    def get_close_gap_percentage(self, data_manager: DataManager) -> float:
-        close_gap: float = (
-            data_manager.data1["close"].iloc[-1]
-            / data_manager.data1["open"].loc[
-                get_analysis_start_datetime(self.today).datetime,
-            ]
-        ) - 1
+    def get_close_gap_percentage(self, data_manager: DataManager) -> Optional[float]:
+        try:
+            analysis_index: int = data_manager.data1.index.get_loc(  # type: ignore
+                get_analysis_start_datetime(self.today).datetime
+            )
+
+            close_gap: float = (
+                average(data_manager.data1["close"].iloc[-10:])
+                / average(
+                    data_manager.data1["open"].iloc[analysis_index : analysis_index + 6]
+                )
+                - 1
+            )
+        except:
+            logger.info("Error getting close gap difference", exc_info=True)
+            return None
         return close_gap
 
-    def get_close_gap_difference(
-        self, data_manager: DataManager, datetime: arrow.Arrow
-    ) -> Optional[float]:
+    def get_close_gap_difference(self, data_manager: DataManager) -> Optional[float]:
         try:
-            close_gap: float = (
-                data_manager.data1["close"].iloc[-1]
-                - data_manager.data1["open"].loc[datetime.datetime]
+            analysis_index: int = data_manager.data1.index.get_loc(  # type: ignore
+                get_analysis_start_datetime(self.today).datetime
+            )
+
+            close_gap: float = average(
+                data_manager.data1["close"].iloc[-10:]
+            ) - average(
+                data_manager.data1["open"].iloc[analysis_index : analysis_index + 6]
             )
         except:
             logger.info("Error getting close gap difference", exc_info=True)
@@ -402,13 +414,13 @@ class BaseStrategy:
     def should_trade_stock(self, data_manager: DataManager) -> bool:
         if data_manager.close_gap is None:
             raise Exception("Close gap is None")
-        absolute_gap = 0
+        absolute_gap: float = 0
         filtered_df = data_manager.data5.loc[
             get_analysis_start_datetime(self.today).shift(minutes=5).datetime :  # type: ignore
         ].copy()
 
-        filtered_df["high_low_diff"] = filtered_df["high"] - filtered_df["low"]
-        absolute_gap = filtered_df["high_low_diff"].sum(skipna=True)
+        close_diffs = filtered_df["close"].diff().abs()
+        absolute_gap = float(close_diffs.sum(skipna=True))  # type: ignore
 
         if absolute_gap > abs(data_manager.close_gap) * CLOSE_GAP_MULTIPLIER_THRESHOLD:
             log_important(
@@ -460,61 +472,38 @@ class BaseStrategy:
         ):
             data_manager.score = 0
             return
-        data_manager.close_gap = self.get_close_gap_difference(
-            data_manager, get_analysis_start_datetime(self.today)
-        )
+        data_manager.close_gap = self.get_close_gap_difference(data_manager)
         if data_manager.close_gap is None:
             data_manager.score = 0
             data_manager.close_gap = 0
             return
 
-        if data_manager.close_gap > 0:
-            should_trade_stock = self.should_trade_stock(data_manager)
-            if not should_trade_stock:
-                data_manager.score = 0
-            else:
-                if data_manager.absolute_gap is None:
-                    raise Exception("Absolute gap is None")
-                data_manager.score = (
-                    abs(self.get_close_gap_percentage(data_manager))
-                    * data_manager.absolute_gap
-                    * interpolate_volume(
-                        data_manager.average_volume,
-                        int(
-                            self.cash
-                            // (CHOSEN_STOCKS_AMOUNT * MINIMUM_VOLUME_MULTIPLIER)
-                        ),
-                        int(self.cash // CHOSEN_STOCKS_AMOUNT),
-                    )
-                    * 100
-                )
-
-                log_important(
-                    f"Score for {data_manager.symbol}: {data_manager.score:.3f}", "info"
-                )
+        should_trade_stock = self.should_trade_stock(data_manager)
+        if not should_trade_stock:
+            data_manager.score = 0
         else:
-            should_trade_stock = self.should_trade_stock(data_manager)
-            if not should_trade_stock:
+            if data_manager.absolute_gap is None:
+                raise Exception("Absolute gap is None")
+            close_gap_percentage = self.get_close_gap_percentage(data_manager)
+            if close_gap_percentage is None:
                 data_manager.score = 0
-            else:
-                if data_manager.absolute_gap is None:
-                    raise Exception("Absolute gap is None")
-                data_manager.score = (
-                    abs(self.get_close_gap_percentage(data_manager))
-                    * data_manager.absolute_gap
-                    * interpolate_volume(
-                        data_manager.average_volume,
-                        int(
-                            self.cash
-                            // (CHOSEN_STOCKS_AMOUNT * MINIMUM_VOLUME_MULTIPLIER)
-                        ),
-                        int(self.cash // CHOSEN_STOCKS_AMOUNT),
-                    )
-                    * 100
+                return
+            data_manager.score = (
+                abs(close_gap_percentage)
+                * data_manager.absolute_gap
+                * interpolate_volume(
+                    data_manager.average_volume,
+                    int(
+                        self.cash // (CHOSEN_STOCKS_AMOUNT * MINIMUM_VOLUME_MULTIPLIER)
+                    ),
+                    int(self.cash // CHOSEN_STOCKS_AMOUNT),
                 )
-                log_important(
-                    f"Score for {data_manager.symbol}: {data_manager.score:.3f}", "info"
-                )
+                * 100
+            )
+
+            log_important(
+                f"Score for {data_manager.symbol}: {data_manager.score:.3f}", "info"
+            )
 
     def enter_position(self) -> None:
         # Entering position with stocks with highest scores
@@ -637,6 +626,9 @@ class BaseStrategy:
                     - 1
                     < PEAK_PRICE_THRESHOLD * data_manager.peak_price_gap
                 ):
+                    logger.info(
+                        f"Leaving position because of peaks {data_manager.symbol} {data_manager.realdata.index[-1]}"
+                    )
                     self.make_end_market_order(data_manager)
                     data_manager.did_leave_position = True
             else:
@@ -855,7 +847,7 @@ class TestStrategy(BaseStrategy):
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"PROFIT LIMIT: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * shares: .2f}"
+                                f"PROFIT LIMIT: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.position_size: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -872,7 +864,7 @@ class TestStrategy(BaseStrategy):
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"STOP LOSS: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * shares: .2f}"
+                                f"STOP LOSS: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.position_size: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -889,7 +881,7 @@ class TestStrategy(BaseStrategy):
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"PROFIT LIMIT: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * shares: .2f}"
+                                f"PROFIT LIMIT: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -905,7 +897,7 @@ class TestStrategy(BaseStrategy):
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"STOP LOSS: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * shares: .2f}"
+                                f"STOP LOSS: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -931,14 +923,14 @@ class TestStrategy(BaseStrategy):
         )
         if data_manager.initial_order.order_type == OrderType.BUY:
             logger.info(
-                f"Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.position_size: .2f}"
+                f"MARKET: Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.position_size: .2f}"
             )
             self.fake_cash += (
                 data_manager.data1["close"].iloc[-1] * data_manager.position_size
             )
         else:
             logger.info(
-                f"Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
+                f"MARKET: Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
             )
             self.fake_cash -= (
                 data_manager.data1["close"].iloc[-1] * data_manager.position_size

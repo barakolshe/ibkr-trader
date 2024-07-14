@@ -1,5 +1,6 @@
 import os
 from typing import Any
+import arrow
 from pymongo import MongoClient
 
 from models.evaluation import Evaluation
@@ -34,18 +35,17 @@ def get_actions(exchanges: list[str], all: bool) -> list[Evaluation]:
 
     documents_list = list(documents)
 
-    # TODO: Uncomment this
-    # if not all and len(documents_list) > 0:  # Ensure there are documents to update
-    #     collection.update_many(
-    #         {"_id": {"$in": [doc["_id"] for doc in documents_list]}},
-    #         {"$set": {"did_trade": True}},
-    #     )
+    if not all and len(documents_list) > 0:  # Ensure there are documents to update
+        collection.update_many(
+            {"_id": {"$in": [doc["_id"] for doc in documents_list]}},
+            {"$set": {"did_trade": True}},
+        )
 
     return [
         Evaluation(
             ticker=doc["ticker"],
             exchange=transform_exchange(doc["exchange"]),
-            timestamp=doc["date"],
+            timestamp=arrow.get(doc["date"]).to("US/Eastern").datetime,
             url=doc["url"],
         )
         for doc in documents_list

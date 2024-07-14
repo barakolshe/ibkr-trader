@@ -53,6 +53,7 @@ class BaseTrader:
 
             if len(filtered_evaluations) == 0:
                 continue
+            logger.info(f"Trading for {date.date()}")
             trader = TestStrategy(date, is_testing=True, initial_cash=cash)
             trader.main_loop(filtered_evaluations)
             filtered_evaluations = []
