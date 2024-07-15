@@ -1,7 +1,5 @@
-from datetime import datetime
 import time
 from consts.time_consts import TIMEZONE
-from consts.trading_consts import get_start_datetime
 from controllers.trading.fetcher import (
     get_actions,
 )

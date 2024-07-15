@@ -3,7 +3,7 @@ from queue import Queue
 from random import randint
 from threading import Thread
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 import arrow
 from numpy import average, median
 from pandas import DataFrame
@@ -15,7 +15,9 @@ from consts.trading_consts import (
     CHOSEN_STOCKS_AMOUNT,
     CLOSE_GAP_MULTIPLIER_THRESHOLD,
     MINIMUM_SHARE_PRICE,
+    MINIMUM_VOLUME,
     MINIMUM_VOLUME_MULTIPLIER,
+    PEAK_HIGHEST,
     PEAK_PRICE_THRESHOLD,
     STOP_LOSS,
     TARGET_PROFIT,
@@ -36,12 +38,20 @@ from utils.math_utils import D
 
 
 def interpolate_volume(volume: float, min_volume: int, max_volume: int) -> float:
+    min_volume = max(min_volume, MINIMUM_VOLUME)
     if volume <= min_volume:
         return 0
     elif volume >= max_volume:
         return 1
     else:
         return (volume - min_volume) / (max_volume - min_volume)
+
+
+def get_empty_df() -> DataFrame:
+    empty_df = pd.DataFrame(columns=["open", "high", "low", "close", "volume", "wap"])
+    empty_df.index = pd.to_datetime(empty_df.index)
+
+    return empty_df
 
 
 class DataManager(BaseModel):
@@ -67,28 +77,18 @@ class DataManager(BaseModel):
     did_leave_position: bool = False
     position_size: Optional[int] = None
 
-    realdata: DataFrame
+    realdata: DataFrame = get_empty_df()
 
-    @property
-    def data1(self) -> DataFrame:
+    data1: DataFrame = get_empty_df()
+
+    def resample_datas(self) -> None:
         if self.is_testing:
-            return self.realdata
-        df = self.realdata.resample("1min").agg(
-            {
-                "open": "first",
-                "high": "max",
-                "low": "min",
-                "close": "last",
-                "volume": "sum",
-                "wap": "mean",
-            }
-        )
-        df = complete_missing_minutes(df, "1min")
-        return df
+            self.data1 = self.realdata
+        else:
+            self.data1 = self.resample_data(1)
 
-    @property
-    def data3(self) -> DataFrame:
-        df = self.realdata.resample("3min").agg(
+    def resample_data(self, minutes: int) -> DataFrame:
+        df = self.realdata.resample(f"{minutes}min").agg(
             {
                 "open": "first",
                 "high": "max",
@@ -99,7 +99,7 @@ class DataManager(BaseModel):
             }
         )
         if not self.is_testing:
-            df = complete_missing_minutes(df, "3min")
+            df = complete_missing_minutes(df, f"{minutes}min")
         return df
 
     @property
@@ -185,10 +185,6 @@ class BaseStrategy:
 
     def main_loop(self, evaluations: list[Evaluation]) -> None:
         for evaluation in evaluations:
-            empty_df = pd.DataFrame(
-                columns=["open", "high", "low", "close", "volume", "wap"]
-            )
-            empty_df.index = pd.to_datetime(empty_df.index)
             min_tick = self.ibwrapper.get_min_tick_blocking(evaluation)
             self.data_managers.append(
                 DataManager(
@@ -202,7 +198,6 @@ class BaseStrategy:
                         if not self.is_testing
                         else None
                     ),
-                    realdata=empty_df,
                     min_tick=min_tick if min_tick is not None else D("0.01"),
                 )
             )
@@ -282,6 +277,7 @@ class BaseStrategy:
                         data_manager.realdata.loc[curr_datetime] = existing_df.loc[  # type: ignore
                             curr_datetime
                         ]
+                        data_manager.resample_datas()
                 curr_datetime += timedelta(minutes=1)
                 if self.get_curr_datetime() is None:
                     continue
@@ -289,6 +285,8 @@ class BaseStrategy:
         else:
             while arrow.now(tz=TIMEZONE).hour < 16:
                 self.get_live_data()
+                for data_manager in self.data_managers:
+                    data_manager.resample_datas()
                 self.trade()
 
     def should_enter_position(self, curr_datetime: datetime) -> bool:
@@ -602,7 +600,7 @@ class BaseStrategy:
             if data_manager.close_gap is not None and data_manager.close_gap > 0:
                 if (
                     data_manager.realdata["close"].iloc[-1]
-                    > 1.01 * data_manager.initial_order.price
+                    > (1 + PEAK_HIGHEST) * data_manager.initial_order.price
                 ):
                     if (
                         not data_manager.peak_price_gap
@@ -634,7 +632,7 @@ class BaseStrategy:
             else:
                 if (
                     data_manager.realdata["close"].iloc[-1]
-                    < 0.99 * data_manager.initial_order.price
+                    < (1 - PEAK_HIGHEST) * data_manager.initial_order.price
                 ):
                     if (
                         not data_manager.peak_price_gap
@@ -847,7 +845,7 @@ class TestStrategy(BaseStrategy):
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"PROFIT LIMIT: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.position_size: .2f}"
+                                f"PROFIT LIMIT: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.initial_order.quantity: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -864,7 +862,7 @@ class TestStrategy(BaseStrategy):
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"STOP LOSS: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.position_size: .2f}"
+                                f"STOP LOSS: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.initial_order.quantity: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -881,7 +879,7 @@ class TestStrategy(BaseStrategy):
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"PROFIT LIMIT: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
+                                f"PROFIT LIMIT: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.initial_order.quantity: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -897,7 +895,7 @@ class TestStrategy(BaseStrategy):
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"STOP LOSS: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
+                                f"STOP LOSS: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.initial_order.quantity: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -923,14 +921,14 @@ class TestStrategy(BaseStrategy):
         )
         if data_manager.initial_order.order_type == OrderType.BUY:
             logger.info(
-                f"MARKET: Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.position_size: .2f}"
+                f"MARKET: Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.initial_order.quantity: .2f}"
             )
             self.fake_cash += (
                 data_manager.data1["close"].iloc[-1] * data_manager.position_size
             )
         else:
             logger.info(
-                f"MARKET: Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.position_size: .2f}"
+                f"MARKET: Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.initial_order.quantity: .2f}"
             )
             self.fake_cash -= (
                 data_manager.data1["close"].iloc[-1] * data_manager.position_size
