@@ -18,7 +18,8 @@ def get_actions(exchanges: list[str], all: bool) -> list[Evaluation]:
     password = os.environ.get("MONGODB_PASSWORD")
     cluster_name = os.environ.get("MONGODB_CLUSTER_NAME")
     client: MongoClient[Any] = MongoClient[Any](
-        f"mongodb://{username}:{password}@{cluster_name}/?retryWrites=true&w=majority&appName=best-friend"
+        f"mongodb://{username}:{password}@{cluster_name}/?retryWrites=true&w=majority&appName=best-friend",
+        directConnection=True,
     )
     db = client["trading"]
     collection = db["actions"]
