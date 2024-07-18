@@ -8,7 +8,9 @@ from controllers.trading.trader import BaseTrader, compare_dates
 import arrow
 import boto3
 from logger.logger import logger
+from dotenv import load_dotenv
 
+load_dotenv()
 
 US_EXCHANGES = ["NYSE", "NASDAQ", "AMEX", "NYSEA"]
 AMAZON_BUCKET_NAME: str = "barak-trading-bucket"
