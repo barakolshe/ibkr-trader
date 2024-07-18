@@ -22,7 +22,7 @@ def get_end_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
 
 STOP_LOSS = 0.02
 TARGET_PROFIT = 0.04
-CHOSEN_STOCKS_AMOUNT = 3
+CHOSEN_STOCKS_AMOUNT = 2
 MINIMUM_SHARE_PRICE = 1.5
 
 # Close gap
