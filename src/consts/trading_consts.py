@@ -3,7 +3,7 @@ import arrow
 
 
 def get_volume_analysis_start_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
-    return arrow.get(date).replace(hour=9, minute=45, second=0)
+    return arrow.get(date).replace(hour=9, minute=50, second=0)
 
 
 def get_analysis_start_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
@@ -11,23 +11,23 @@ def get_analysis_start_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
 
 
 def get_start_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
-    return arrow.get(date).replace(hour=11, minute=0, second=0)
+    return arrow.get(date).replace(hour=10, minute=45, second=0)
 
 
 def get_end_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
-    return arrow.get(date).replace(hour=15, minute=0, second=0)
+    return arrow.get(date).replace(hour=15, minute=30, second=0)
 
 
 # Important
 
 STOP_LOSS = 0.02
 TARGET_PROFIT = 0.04
-CHOSEN_STOCKS_AMOUNT = 2
+CHOSEN_STOCKS_AMOUNT = 3
 MINIMUM_SHARE_PRICE = 1.5
 
 # Close gap
 
-CLOSE_GAP_MULTIPLIER_THRESHOLD = 10
+CLOSE_GAP_MULTIPLIER_THRESHOLD = 6
 
 # Peaks
 
