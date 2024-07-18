@@ -69,6 +69,9 @@ def live_trade_loop() -> None:
         now_date = arrow.now(tz="US/Eastern")
         days_shift = 7 - now_date.weekday() if now_date.weekday() > 5 else 1
         if now_date < now_date.replace(hour=10, minute=45, second=0):
+            logger.info(
+                f"Sleeping {(now_date.datetime - now_date.replace(hour=10, minute=45, second=0).datetime).seconds // 60} minutes"
+            )
             if not sleep_until(now_date.replace(hour=10, minute=45, second=0)):
                 return
             live_trade()
