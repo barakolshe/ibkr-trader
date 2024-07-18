@@ -68,6 +68,10 @@ def live_trade_loop() -> None:
     while True:
         now_date = arrow.now(tz="US/Eastern")
         days_shift = 7 - now_date.weekday() if now_date.weekday() > 5 else 1
+        if now_date < now_date.replace(hour=10, minute=45, second=0):
+            if not sleep_until(now_date.replace(hour=10, minute=45, second=0)):
+                return
+            live_trade()
         if not sleep_until(
             now_date.shift(days=days_shift).replace(hour=10, minute=45, second=0)
         ):
