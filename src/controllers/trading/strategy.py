@@ -167,7 +167,7 @@ class BaseStrategy:
         initial_cash: Optional[float] = None,
     ) -> None:
         self.app = IBapi()
-        self.app.connect("127.0.0.1", 4002, randint(1, 100))
+        self.app.connect("127.0.0.1", 4002, 35)
         self.ib_app_thread = Thread(target=self.app.run, daemon=True)
         self.ib_app_thread.start()
         self.today = today
@@ -414,7 +414,7 @@ class BaseStrategy:
             raise Exception("Close gap is None")
         absolute_gap: float = 0
         filtered_df = data_manager.data5.loc[
-            get_analysis_start_datetime(self.today).shift(minutes=5).datetime :  # type: ignore
+            get_analysis_start_datetime(self.today).datetime :  # type: ignore
         ].copy()
 
         close_diffs = filtered_df["close"].diff().abs()
