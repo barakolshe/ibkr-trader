@@ -12,13 +12,13 @@ def compare_dates(actual_date: arrow.Arrow, article_datetime: arrow.Arrow) -> bo
         return (
             actual_date.shift(days=-3).replace(hour=16, minute=0, second=0)
             < article_datetime
-            < actual_date.replace(hour=9, minute=30, second=0)
+            < actual_date.replace(hour=10, minute=45, second=0)
         )
     else:
         return (
             actual_date.shift(days=-1).replace(hour=16, minute=0, second=0)
             < article_datetime
-            < actual_date.replace(hour=9, minute=30, second=0)
+            < actual_date.replace(hour=10, minute=45, second=0)
         )
 
 
