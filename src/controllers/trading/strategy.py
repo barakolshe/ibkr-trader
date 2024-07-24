@@ -1,9 +1,10 @@
 from decimal import Decimal
+import os
 from queue import Queue
 from random import randint
 from threading import Thread
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 import arrow
 from numpy import average, median
 from pandas import DataFrame
@@ -19,6 +20,7 @@ from consts.trading_consts import (
     MINIMUM_VOLUME_MULTIPLIER,
     PEAK_HIGHEST,
     PEAK_PRICE_THRESHOLD,
+    PREVIOUS_DAY_CLOSE_COMPARISON,
     STOP_LOSS,
     TARGET_PROFIT,
     get_analysis_start_datetime,
@@ -58,7 +60,7 @@ class DataManager(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     is_testing: bool = False
 
-    historic_queue: Queue[Any]
+    historic_queue: Optional[Queue[Any]] = None
     live_queue: Optional[Queue[Any]] = None
     symbol: str
     min_tick: Decimal
@@ -76,6 +78,7 @@ class DataManager(BaseModel):
     is_in_position: bool = False
     did_leave_position: bool = False
     position_size: Optional[int] = None
+    yesterday_close: Optional[float] = None
 
     realdata: DataFrame = get_empty_df()
 
@@ -167,7 +170,7 @@ class BaseStrategy:
         initial_cash: Optional[float] = None,
     ) -> None:
         self.app = IBapi()
-        self.app.connect("127.0.0.1", 4002, 35)
+        self.app.connect("127.0.0.1", 4002, 36)
         self.ib_app_thread = Thread(target=self.app.run, daemon=True)
         self.ib_app_thread.start()
         self.today = today
@@ -186,12 +189,17 @@ class BaseStrategy:
     def main_loop(self, evaluations: list[Evaluation]) -> None:
         for evaluation in evaluations:
             min_tick = self.ibwrapper.get_min_tick_blocking(evaluation)
+            does_file_exist = os.path.exists(
+                f"data/stocks/{evaluation.ticker}-{self.today.date()}.csv"
+            )
             self.data_managers.append(
                 DataManager(
                     is_testing=self.is_testing,
                     symbol=evaluation.ticker,
-                    historic_queue=self.ibwrapper.get_historical_data(
-                        evaluation, self.today
+                    historic_queue=(
+                        self.ibwrapper.get_historical_data(evaluation, self.today)
+                        if not does_file_exist
+                        else None
                     ),
                     live_queue=(
                         self.ibwrapper.get_live_data(evaluation)
@@ -208,14 +216,27 @@ class BaseStrategy:
         self.ib_app_thread.join()
 
     def get_past_data(self) -> None:
+        for data_manager in self.data_managers:
+            if data_manager.historic_queue is None:
+                data_manager.realdata = pd.read_csv(
+                    f"data/stocks/{data_manager.symbol}-{self.today.date()}.csv",
+                    index_col=0,
+                    parse_dates=True,
+                )
+                data_manager.is_finished = True
+        relevant_data_managers = [
+            data_manager
+            for data_manager in self.data_managers
+            if data_manager.historic_queue is not None
+        ]
         while True:
             if all(
                 [
                     curr_data_manager.is_finished
-                    for curr_data_manager in self.data_managers
+                    for curr_data_manager in relevant_data_managers
                 ]
             ):
-                for data_manager in self.data_managers:
+                for data_manager in relevant_data_managers:
                     if data_manager.realdata.empty:
                         continue
                     data_manager.realdata = complete_missing_minutes(
@@ -223,9 +244,15 @@ class BaseStrategy:
                     )
                 return
             while not all(
-                [data_manager.is_finished for data_manager in self.data_managers]
+                [
+                    data_manager.is_finished
+                    for data_manager in relevant_data_managers
+                    if data_manager.historic_queue is not None
+                ]
             ):
-                for data_manager in self.data_managers:
+                for data_manager in relevant_data_managers:
+                    if data_manager.historic_queue is None:
+                        raise Exception("Historic queue is None")
                     if data_manager.historic_queue.empty() or data_manager.is_finished:
                         continue
 
@@ -258,16 +285,42 @@ class BaseStrategy:
     def iterate_queues(self) -> None:
 
         self.get_past_data()
+        for data_manager in self.data_managers:
+            if data_manager.realdata.empty:
+                continue
+            if (
+                arrow.now(tz=TIMEZONE)
+                .replace(hour=0, minute=0, second=0)
+                .shift(days=-1)
+                .datetime
+                > self.today
+            ):
+                if not os.path.exists(
+                    f"data/stocks/{data_manager.symbol}-{self.today.date()}.csv"
+                ):
+                    data_manager.realdata.to_csv(
+                        f"data/stocks/{data_manager.symbol}-{self.today.date()}.csv"
+                    )
         if self.is_testing:
             existing_dfs = [
                 data_manager.realdata for data_manager in self.data_managers
             ]
             for data_manager in self.data_managers:
+                try:
+                    filtered_df = data_manager.realdata[
+                        data_manager.realdata.index < self.today
+                    ]
+                    if not filtered_df.empty:
+                        data_manager.yesterday_close = filtered_df["close"].iloc[-1]
+                except:
+                    pass
+
                 empty_df = pd.DataFrame(
                     columns=["open", "high", "low", "close", "volume", "wap"]
                 )
                 empty_df.index = pd.to_datetime(empty_df.index)
                 data_manager.realdata = empty_df
+
             start_datetime = arrow.get(self.today).replace(hour=9, minute=30).datetime
             end_datetime = arrow.get(self.today).replace(hour=16, minute=0).datetime
             curr_datetime = start_datetime
@@ -448,7 +501,13 @@ class BaseStrategy:
         return
 
     def get_stats(self, data_manager: DataManager) -> None:
-        if data_manager.data1["close"].iloc[-1] <= MINIMUM_SHARE_PRICE:
+        curr_close_price = data_manager.data1["close"].iloc[-1]
+        if curr_close_price <= MINIMUM_SHARE_PRICE or (
+            PREVIOUS_DAY_CLOSE_COMPARISON
+            and data_manager.yesterday_close is not None
+            and abs(curr_close_price - data_manager.yesterday_close)
+            > 0.05 * data_manager.yesterday_close
+        ):
             data_manager.score = 0
             return
         try:
@@ -468,6 +527,7 @@ class BaseStrategy:
             )
             == 0
         ):
+            log_important("Not trading because average volume is too low", "info")
             data_manager.score = 0
             return
         data_manager.close_gap = self.get_close_gap_difference(data_manager)
@@ -512,7 +572,8 @@ class BaseStrategy:
         sorted_scores: list[DataManager] = sorted(
             filtered_scores, key=lambda x: x.score, reverse=True  # type: ignore
         )[0:CHOSEN_STOCKS_AMOUNT]
-        for data_manager in sorted_scores:
+        sorted_scores.reverse()
+        for index, data_manager in enumerate(sorted_scores):
             curr_datetime = data_manager.data1.index[-1]
             if (
                 not (
@@ -530,15 +591,16 @@ class BaseStrategy:
                 data_manager.data1["close"].iloc[-1],
                 data_manager.average_volume,
                 self.cash,
-                len(sorted_scores),
+                len(sorted_scores) - index,
             )
             if data_manager.close_gap is None:
                 continue
             data_manager.position_size = size
             if data_manager.close_gap > D("0"):
                 logger.info(
-                    f"Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]}"
+                    f"Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]}, size: {size}"
                 )
+                self.cash -= size * data_manager.data1["close"].iloc[-1]
                 (
                     data_manager.initial_order,
                     data_manager.limit_price_order,
@@ -557,13 +619,14 @@ class BaseStrategy:
                     contract=self.ibwrapper.get_contract(data_manager.symbol),
                     parent_valid=data_manager.data1.index[-1] + timedelta(minutes=30),
                     children_valid=arrow.get(data_manager.data1.index[-1])
-                    .replace(hour=15, minute=0, second=0)
+                    .replace(hour=14, minute=55, second=0)
                     .datetime,
                 )
             else:
                 logger.info(
-                    f"Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]}"
+                    f"Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]}, size: {size}"
                 )
+                self.cash -= size * data_manager.data1["close"].iloc[-1]
                 (
                     data_manager.initial_order,
                     data_manager.limit_price_order,
@@ -582,7 +645,7 @@ class BaseStrategy:
                     contract=self.ibwrapper.get_contract(data_manager.symbol),
                     parent_valid=data_manager.data1.index[-1] + timedelta(minutes=30),
                     children_valid=arrow.get(data_manager.data1.index[-1])
-                    .replace(hour=15, minute=0, second=0)
+                    .replace(hour=14, minute=55, second=0)
                     .datetime,
                 )
 
@@ -966,7 +1029,7 @@ class PaperStrategy(BaseStrategy):
     ) -> int:
         size = min(
             int(average_volume),
-            int(min(cash * 0.99, 5000) // price // divider),
+            int(min(cash * 0.99, 50000) // price // divider),
         )
         return size
 
@@ -1066,8 +1129,6 @@ class PaperStrategy(BaseStrategy):
         logger.info(
             f"Making end market order for {data_manager.symbol} {data_manager.data1['close'].iloc[-1]}"
         )
-        self.app.cancelOrder(data_manager.limit_price_order.id, "")
-        self.app.cancelOrder(data_manager.stop_price_order.id, "")
         contract = self.ibwrapper.get_contract(data_manager.symbol)
         if data_manager.initial_order.order_type == OrderType.BUY:
             data_manager.market_order = self.app.place_order(

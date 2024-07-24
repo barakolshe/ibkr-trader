@@ -28,6 +28,8 @@ def get_actions(exchanges: list[str], all: bool) -> list[Evaluation]:
     if not all:
         filters["did_trade"] = False
 
+    collection.update_many({"exchange": "CBOE BZX"}, {"$set": {"exchange": None}})
+    collection.update_many({"exchange": "CBOEBZX"}, {"$set": {"exchange": None}})
     documents = collection.find(
         filters,
         {"_id": 1, "ticker": 1, "exchange": 1, "date": 1, "url": 1},
@@ -41,6 +43,13 @@ def get_actions(exchanges: list[str], all: bool) -> list[Evaluation]:
             {"$set": {"did_trade": True}},
         )
 
+    filtered_documents: list[Any] = []
+    for document in documents_list:
+        if document["ticker"] not in [
+            filtered_document["ticker"] for filtered_document in filtered_documents
+        ]:
+            filtered_documents.append(document)
+
     return [
         Evaluation(
             ticker=doc["ticker"],
@@ -48,5 +57,5 @@ def get_actions(exchanges: list[str], all: bool) -> list[Evaluation]:
             timestamp=arrow.get(doc["date"]).to("US/Eastern").datetime,
             url=doc["url"],
         )
-        for doc in documents_list
+        for doc in filtered_documents
     ]

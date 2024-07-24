@@ -378,3 +378,13 @@ class IBapi(EWrapper, EClient):  # type: ignore
                     quantity=int(filled),
                 )
                 queue.put(new_order)
+            case "Submitted":
+                new_order = Order(
+                    id=orderId,
+                    queue=queue,
+                    status=OrderStatus.PARTIAL,
+                    order_type=order.order_type,
+                    price=order.price,
+                    quantity=order.quantity,
+                )
+                queue.put(new_order)

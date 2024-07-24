@@ -30,7 +30,7 @@ class IBWrapper:
         queue = self.app.req_historical_data(
             contract,
             endDate,  # end date time
-            f"1 D",  # duration
+            f"4 D",  # duration
             f"1 min",  # bar size
             "TRADES",  # what to show
             0,  # is regular trading hours
@@ -70,8 +70,10 @@ class IBWrapper:
         return float(usd)
 
     def get_contract(
-        self, symbol: str, exchange: str = "SMART", currency: str = "USD"
+        self, symbol: str, exchange: Optional[str] = "SMART", currency: str = "USD"
     ) -> Contract:
+        if exchange is None:
+            exchange = "SMART"
         contract = Contract()
         contract.symbol = symbol
         contract.secType = "STK"

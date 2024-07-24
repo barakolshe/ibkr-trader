@@ -47,7 +47,7 @@ important_file_handler.setLevel(logging.INFO)
 important_file_handler.setFormatter(formatter)
 
 stdout_handler = logging.StreamHandler(sys.stdout)
-stdout_handler.setLevel(logging.INFO)
+stdout_handler.setLevel(logging.DEBUG)
 stdout_handler.setFormatter(formatter)
 
 discord_handler = DiscordHandler()

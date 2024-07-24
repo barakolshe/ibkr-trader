@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-US_EXCHANGES = ["NYSE", "NASDAQ", "AMEX", "NYSEA"]
+US_EXCHANGES = ["NYSE", "NASDAQ", "AMEX", "NYSEA", None]
 AMAZON_BUCKET_NAME: str = "barak-trading-bucket"
 
 

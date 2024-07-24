@@ -20,10 +20,10 @@ def get_end_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
 
 # Important
 
-STOP_LOSS = 0.02
-TARGET_PROFIT = 0.04
+STOP_LOSS = 0.008
+TARGET_PROFIT = 0.012
 CHOSEN_STOCKS_AMOUNT = 2
-MINIMUM_SHARE_PRICE = 1.5
+MINIMUM_SHARE_PRICE = 8
 
 # Close gap
 
@@ -36,6 +36,8 @@ PEAK_HIGHEST = 0.02
 PEAK_PRICE_THRESHOLD = 0.25
 
 CHECK_PEAKS = False
+
+PREVIOUS_DAY_CLOSE_COMPARISON = False
 
 # Volume
 
