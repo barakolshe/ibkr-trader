@@ -6,5 +6,5 @@ from pydantic import BaseModel
 class Evaluation(BaseModel):
     timestamp: datetime
     ticker: str
-    exchange: Optional[str]
+    exchange: str
     url: str

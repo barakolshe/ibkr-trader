@@ -1,10 +1,11 @@
 import time
 from consts.time_consts import TIMEZONE
+from consts.trading_consts import get_start_datetime
 from controllers.trading.fetcher import (
     get_actions,
 )
 from controllers.trading.strategy import PaperStrategy
-from controllers.trading.trader import BaseTrader, compare_dates
+from controllers.trading.trader import BaseTrader, compare_dates, filter_evaluations
 import arrow
 import boto3
 from logger.logger import logger
@@ -12,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-US_EXCHANGES = ["NYSE", "NASDAQ", "AMEX", "NYSEA", None]
+US_EXCHANGES = ["NYSE", "NASDAQ", "AMEX", "NYSEA"]
 AMAZON_BUCKET_NAME: str = "barak-trading-bucket"
 
 
@@ -57,32 +58,34 @@ def live_trade() -> None:
         for evaluation in evaluations
         if compare_dates(arrow.now(tz=TIMEZONE), arrow.get(evaluation.timestamp))
     ]
+    logger.info("Initializing paper strategy")
+    filtered_evaluations = filter_evaluations(filtered_evaluations)
     strategy = PaperStrategy(
         arrow.now(tz=TIMEZONE)
         .replace(hour=0, minute=0, second=0, microsecond=0)
         .datetime
     )
+    logger.info("Starting main loop")
     strategy.main_loop(filtered_evaluations)
 
 
 def live_trade_loop() -> None:
-    # logger.info("Running")
-    # while True:
-    #     now_date = arrow.now(tz="US/Eastern")
-    #     days_shift = 7 - now_date.weekday() if now_date.weekday() > 5 else 1
-    #     logger.info(f"Now date {now_date}, ")
-    #     if now_date < now_date.replace(hour=10, minute=48, second=0):
-    #         logger.info(
-    #             f"Sleeping {(now_date.datetime - now_date.replace(hour=10, minute=48, second=0).datetime).seconds // 60} minutes"
-    #         )
-    #         if not sleep_until(now_date.replace(hour=10, minute=48, second=0)):
-    #             return
-    #         live_trade()
-    #     if not sleep_until(
-    #         now_date.shift(days=days_shift).replace(hour=10, minute=48, second=0)
-    #     ):
-    #         return
-    live_trade()
+    logger.info("Running")
+    while True:
+        now_date = arrow.now(tz=TIMEZONE)
+        days_shift = 7 - now_date.weekday() if now_date.weekday() > 5 else 1
+        logger.info(f"Now date {now_date}, ")
+        if now_date < get_start_datetime(now_date).shift(minutes=-4):
+            logger.info(
+                f"Sleeping {(now_date.datetime - get_start_datetime(now_date).shift(minutes=-4).datetime).seconds // 60} minutes"
+            )
+            if not sleep_until(get_start_datetime(now_date).shift(minutes=-4)):
+                return
+            live_trade()
+        if not sleep_until(
+            get_start_datetime(now_date).shift(minutes=-10, days=days_shift)
+        ):
+            return
 
 
 if __name__ == "__main__":

@@ -170,7 +170,7 @@ class BaseStrategy:
         initial_cash: Optional[float] = None,
     ) -> None:
         self.app = IBapi()
-        self.app.connect("127.0.0.1", 4002, 36)
+        self.app.connect("127.0.0.1", 4002, 37)
         self.ib_app_thread = Thread(target=self.app.run, daemon=True)
         self.ib_app_thread.start()
         self.today = today
@@ -192,6 +192,7 @@ class BaseStrategy:
             does_file_exist = os.path.exists(
                 f"data/stocks/{evaluation.ticker}-{self.today.date()}.csv"
             )
+            logger.info(f"Getting data for {evaluation.ticker}")
             self.data_managers.append(
                 DataManager(
                     is_testing=self.is_testing,
@@ -574,7 +575,7 @@ class BaseStrategy:
         )[0:CHOSEN_STOCKS_AMOUNT]
         sorted_scores.reverse()
         for index, data_manager in enumerate(sorted_scores):
-            curr_datetime = data_manager.data1.index[-1]
+            curr_datetime = data_manager.realdata.index[-1]
             if (
                 not (
                     get_start_datetime(self.today).shift(minutes=-1).datetime
@@ -588,7 +589,7 @@ class BaseStrategy:
             if data_manager.average_volume is None:
                 raise Exception("Average volume is None")
             size = self.get_size(
-                data_manager.data1["close"].iloc[-1],
+                data_manager.realdata["close"].iloc[-1],
                 data_manager.average_volume,
                 self.cash,
                 len(sorted_scores) - index,
@@ -598,9 +599,9 @@ class BaseStrategy:
             data_manager.position_size = size
             if data_manager.close_gap > D("0"):
                 logger.info(
-                    f"Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]}, size: {size}"
+                    f"Buying {data_manager.symbol} for {data_manager.realdata['close'].iloc[-1]} {data_manager.realdata.index[-1]}, size: {size}"
                 )
-                self.cash -= size * data_manager.data1["close"].iloc[-1]
+                self.cash -= size * data_manager.realdata["close"].iloc[-1]
                 (
                     data_manager.initial_order,
                     data_manager.limit_price_order,
@@ -609,24 +610,26 @@ class BaseStrategy:
                     data_manager,
                     action=OrderType.BUY,
                     quantity=size,
-                    price_limit=data_manager.data1["close"].iloc[-1],
-                    take_profit_limit_price=data_manager.data1["close"].iloc[-1]
+                    price_limit=data_manager.realdata["close"].iloc[-1],
+                    take_profit_limit_price=data_manager.realdata["close"].iloc[-1]
                     * (1 + TARGET_PROFIT),
-                    stop_loss_price=data_manager.data1["close"].iloc[-1]
+                    stop_loss_price=data_manager.realdata["close"].iloc[-1]
                     * (1 - STOP_LOSS),
-                    stop_loss_limit_price=data_manager.data1["close"].iloc[-1]
+                    stop_loss_limit_price=data_manager.realdata["close"].iloc[-1]
                     * (1 - STOP_LOSS),
                     contract=self.ibwrapper.get_contract(data_manager.symbol),
-                    parent_valid=data_manager.data1.index[-1] + timedelta(minutes=30),
-                    children_valid=arrow.get(data_manager.data1.index[-1])
-                    .replace(hour=14, minute=55, second=0)
+                    parent_valid=data_manager.realdata.index[-1]
+                    + timedelta(minutes=30),
+                    children_valid=get_end_datetime(self.today)
+                    .shift(minutes=-30)
+                    .replace(hour=12, minute=43, second=0)
                     .datetime,
                 )
             else:
                 logger.info(
-                    f"Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]}, size: {size}"
+                    f"Selling {data_manager.symbol} for {data_manager.realdata['close'].iloc[-1]} {data_manager.realdata.index[-1]}, size: {size}"
                 )
-                self.cash -= size * data_manager.data1["close"].iloc[-1]
+                self.cash -= size * data_manager.realdata["close"].iloc[-1]
                 (
                     data_manager.initial_order,
                     data_manager.limit_price_order,
@@ -635,17 +638,19 @@ class BaseStrategy:
                     data_manager,
                     action=OrderType.SELL,
                     quantity=size,
-                    price_limit=data_manager.data1["close"].iloc[-1],
-                    take_profit_limit_price=data_manager.data1["close"].iloc[-1]
+                    price_limit=data_manager.realdata["close"].iloc[-1],
+                    take_profit_limit_price=data_manager.realdata["close"].iloc[-1]
                     * (1 - TARGET_PROFIT),
-                    stop_loss_price=data_manager.data1["close"].iloc[-1]
+                    stop_loss_price=data_manager.realdata["close"].iloc[-1]
                     * (1 + STOP_LOSS),
-                    stop_loss_limit_price=data_manager.data1["close"].iloc[-1]
+                    stop_loss_limit_price=data_manager.realdata["close"].iloc[-1]
                     * (1 + STOP_LOSS),
                     contract=self.ibwrapper.get_contract(data_manager.symbol),
-                    parent_valid=data_manager.data1.index[-1] + timedelta(minutes=30),
-                    children_valid=arrow.get(data_manager.data1.index[-1])
-                    .replace(hour=14, minute=55, second=0)
+                    parent_valid=data_manager.realdata.index[-1]
+                    + timedelta(minutes=30),
+                    children_valid=get_end_datetime(self.today)
+                    .shift(minutes=-30)
+                    .replace(hour=12, minute=43, second=0)
                     .datetime,
                 )
 
@@ -758,7 +763,7 @@ class TestStrategy(BaseStrategy):
         datetimes: list[datetime] = []
         for data_manager in self.data_managers:
             try:
-                datetimes.append(data_manager.data1.index[-1])
+                datetimes.append(data_manager.realdata.index[-1])
             except:
                 continue
         if len(datetimes) == 0:
@@ -767,7 +772,7 @@ class TestStrategy(BaseStrategy):
         return curr_datetime
 
     def should_start_trading(self, data_manager: DataManager) -> bool:
-        curr_datetime: datetime = data_manager.data1.index[-1]
+        curr_datetime: datetime = data_manager.realdata.index[-1]
         return (
             get_start_datetime(self.today).shift(minutes=-1).datetime
             <= curr_datetime
@@ -895,20 +900,22 @@ class TestStrategy(BaseStrategy):
                 shares = int(
                     min(
                         data_manager.position_size,
-                        data_manager.data1["volume"].iloc[-1],
+                        data_manager.realdata["volume"].iloc[-1],
                     )
                 )
                 if data_manager.initial_order.order_type == OrderType.BUY:
                     if (
-                        data_manager.data1["close"].iloc[-1]
+                        data_manager.realdata["close"].iloc[-1]
                         >= data_manager.limit_price_order.price
                     ):
-                        self.fake_cash += data_manager.data1["close"].iloc[-1] * shares
+                        self.fake_cash += (
+                            data_manager.realdata["close"].iloc[-1] * shares
+                        )
 
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"PROFIT LIMIT: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.initial_order.quantity: .2f}"
+                                f"PROFIT LIMIT: Selling {data_manager.symbol} {data_manager.realdata['close'].iloc[-1]} {data_manager.realdata.index[-1]} value: {(data_manager.realdata['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.initial_order.quantity: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -917,15 +924,17 @@ class TestStrategy(BaseStrategy):
                         else:
                             data_manager.limit_price_order.status = OrderStatus.PARTIAL
                     elif (
-                        data_manager.data1["close"].iloc[-1]
+                        data_manager.realdata["close"].iloc[-1]
                         <= data_manager.stop_price_order.price
                     ):
-                        self.fake_cash += data_manager.data1["close"].iloc[-1] * shares
+                        self.fake_cash += (
+                            data_manager.realdata["close"].iloc[-1] * shares
+                        )
 
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"STOP LOSS: Selling {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.initial_order.quantity: .2f}"
+                                f"STOP LOSS: Selling {data_manager.symbol} {data_manager.realdata['close'].iloc[-1]} {data_manager.realdata.index[-1]} value: {(data_manager.realdata['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.initial_order.quantity: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -935,14 +944,16 @@ class TestStrategy(BaseStrategy):
                             data_manager.limit_price_order.status = OrderStatus.PARTIAL
                 else:
                     if (
-                        data_manager.data1["close"].iloc[-1]
+                        data_manager.realdata["close"].iloc[-1]
                         <= data_manager.limit_price_order.price
                     ):
-                        self.fake_cash -= data_manager.data1["close"].iloc[-1] * shares
+                        self.fake_cash -= (
+                            data_manager.realdata["close"].iloc[-1] * shares
+                        )
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"PROFIT LIMIT: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.initial_order.quantity: .2f}"
+                                f"PROFIT LIMIT: Buying {data_manager.symbol} {data_manager.realdata['close'].iloc[-1]} {data_manager.realdata.index[-1]} value: {(data_manager.initial_order.price - data_manager.realdata['close'].iloc[-1]) * data_manager.initial_order.quantity: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -951,14 +962,16 @@ class TestStrategy(BaseStrategy):
                         else:
                             data_manager.limit_price_order.status = OrderStatus.PARTIAL
                     elif (
-                        data_manager.data1["close"].iloc[-1]
+                        data_manager.realdata["close"].iloc[-1]
                         >= data_manager.stop_price_order.price
                     ):
-                        self.fake_cash -= data_manager.data1["close"].iloc[-1] * shares
+                        self.fake_cash -= (
+                            data_manager.realdata["close"].iloc[-1] * shares
+                        )
                         data_manager.position_size -= shares
                         if data_manager.position_size == 0:
                             logger.info(
-                                f"STOP LOSS: Buying {data_manager.symbol} {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.initial_order.quantity: .2f}"
+                                f"STOP LOSS: Buying {data_manager.symbol} {data_manager.realdata['close'].iloc[-1]} {data_manager.realdata.index[-1]} value: {(data_manager.initial_order.price - data_manager.realdata['close'].iloc[-1]) * data_manager.initial_order.quantity: .2f}"
                             )
                             data_manager.limit_price_order.status = (
                                 OrderStatus.COMPLETED
@@ -979,22 +992,22 @@ class TestStrategy(BaseStrategy):
                 if data_manager.initial_order.order_type == OrderType.SELL
                 else OrderType.SELL
             ),
-            price=data_manager.data1["close"].iloc[-1],
+            price=data_manager.realdata["close"].iloc[-1],
             quantity=data_manager.position_size,
         )
         if data_manager.initial_order.order_type == OrderType.BUY:
             logger.info(
-                f"MARKET: Selling {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.data1['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.initial_order.quantity: .2f}"
+                f"MARKET: Selling {data_manager.symbol} for {data_manager.realdata['close'].iloc[-1]} {data_manager.realdata.index[-1]} {data_manager.position_size} value: {(data_manager.realdata['close'].iloc[-1] - data_manager.initial_order.price) * data_manager.initial_order.quantity: .2f}"
             )
             self.fake_cash += (
-                data_manager.data1["close"].iloc[-1] * data_manager.position_size
+                data_manager.realdata["close"].iloc[-1] * data_manager.position_size
             )
         else:
             logger.info(
-                f"MARKET: Buying {data_manager.symbol} for {data_manager.data1['close'].iloc[-1]} {data_manager.data1.index[-1]} {data_manager.position_size} value: {(data_manager.initial_order.price - data_manager.data1['close'].iloc[-1]) * data_manager.initial_order.quantity: .2f}"
+                f"MARKET: Buying {data_manager.symbol} for {data_manager.realdata['close'].iloc[-1]} {data_manager.realdata.index[-1]} {data_manager.position_size} value: {(data_manager.initial_order.price - data_manager.realdata['close'].iloc[-1]) * data_manager.initial_order.quantity: .2f}"
             )
             self.fake_cash -= (
-                data_manager.data1["close"].iloc[-1] * data_manager.position_size
+                data_manager.realdata["close"].iloc[-1] * data_manager.position_size
             )
         data_manager.position_size = 0
         data_manager.did_leave_position = True
@@ -1003,9 +1016,9 @@ class TestStrategy(BaseStrategy):
         self, price: float, order_type: OrderType, precision: Decimal
     ) -> float:
         if order_type == OrderType.BUY:
-            return self.get_price(price * 1.001, precision=precision)
+            return self.get_price(price * 1.003, precision=precision)
         else:
-            return self.get_price(price * 0.999, precision=precision)
+            return self.get_price(price * 0.997, precision=precision)
 
 
 class PaperStrategy(BaseStrategy):
@@ -1014,7 +1027,7 @@ class PaperStrategy(BaseStrategy):
         return arrow.now(tz=TIMEZONE).datetime
 
     def should_start_trading(self, data_manager: DataManager) -> bool:
-        curr_datetime = data_manager.data1.index[-1]
+        curr_datetime = data_manager.realdata.index[-1]
         return (
             get_start_datetime(self.today).shift(minutes=-1).datetime
             <= curr_datetime
@@ -1091,6 +1104,7 @@ class PaperStrategy(BaseStrategy):
                     and data_manager.initial_order.status == OrderStatus.COMPLETED
                 ):
                     data_manager.position_size = data_manager.initial_order.quantity
+                    logger.info("Initial order filled")
             if (
                 data_manager.limit_price_order is not None
                 and not data_manager.limit_price_order.queue.empty()
@@ -1104,6 +1118,7 @@ class PaperStrategy(BaseStrategy):
                 ):
                     data_manager.did_leave_position = True
                     data_manager.position_size = 0
+                    logger.info("Limit price filled")
             if (
                 data_manager.stop_price_order is not None
                 and not data_manager.stop_price_order.queue.empty()
@@ -1117,6 +1132,19 @@ class PaperStrategy(BaseStrategy):
                 ):
                     data_manager.did_leave_position = True
                     data_manager.position_size = 0
+                    logger.info("Stop price filled")
+            if (
+                data_manager.market_order is not None
+                and not data_manager.market_order.queue.empty()
+            ):
+                data_manager.market_order = data_manager.market_order.queue.get()
+                if (
+                    data_manager.market_order is not None
+                    and data_manager.market_order.status == OrderStatus.COMPLETED
+                ):
+                    data_manager.did_leave_position = True
+                    data_manager.position_size = 0
+                    logger.info("Market order filled")
 
     def make_end_market_order(self, data_manager: DataManager) -> None:
         if (
@@ -1127,7 +1155,7 @@ class PaperStrategy(BaseStrategy):
         ):
             raise Exception("Initial order is None")
         logger.info(
-            f"Making end market order for {data_manager.symbol} {data_manager.data1['close'].iloc[-1]}"
+            f"Making end market order for {data_manager.symbol} {data_manager.realdata['close'].iloc[-1]}"
         )
         contract = self.ibwrapper.get_contract(data_manager.symbol)
         if data_manager.initial_order.order_type == OrderType.BUY:
@@ -1137,7 +1165,7 @@ class PaperStrategy(BaseStrategy):
                 orderType="LMT",
                 totalQuantity=abs(data_manager.position_size),
                 lmtPrice=self.get_price_with_deviation(
-                    data_manager.data1["close"].iloc[-1],
+                    data_manager.realdata["close"].iloc[-1],
                     OrderType.SELL,
                     data_manager.min_tick,
                 ),
@@ -1149,7 +1177,7 @@ class PaperStrategy(BaseStrategy):
                 orderType="LMT",
                 totalQuantity=abs(data_manager.position_size),
                 lmtPrice=self.get_price_with_deviation(
-                    data_manager.data1["close"].iloc[-1],
+                    data_manager.realdata["close"].iloc[-1],
                     OrderType.BUY,
                     data_manager.min_tick,
                 ),
@@ -1159,6 +1187,6 @@ class PaperStrategy(BaseStrategy):
         self, price: float, order_type: OrderType, precision: Decimal
     ) -> float:
         if order_type == OrderType.BUY:
-            return self.get_price(max(price * 1.001, price + 0.03), precision=precision)
+            return self.get_price(max(price * 1.003, price + 0.03), precision=precision)
         else:
-            return self.get_price(min(price * 0.999, price - 0.03), precision=precision)
+            return self.get_price(min(price * 0.997, price - 0.03), precision=precision)

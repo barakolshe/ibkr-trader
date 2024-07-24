@@ -22,6 +22,17 @@ def compare_dates(actual_date: arrow.Arrow, article_datetime: arrow.Arrow) -> bo
         )
 
 
+def filter_evaluations(evaluations: list[Evaluation]) -> list[Evaluation]:
+    filtered_evaluations: list[Evaluation] = []
+    for evaluation in evaluations:
+        if evaluation.ticker not in [
+            filtered_document.ticker for filtered_document in filtered_evaluations
+        ]:
+            filtered_evaluations.append(evaluation)
+
+    return filtered_evaluations
+
+
 class BaseTrader:
     def test_strategy(
         self,
@@ -30,7 +41,7 @@ class BaseTrader:
         cash: float = 40000
         # min_date = min(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
         min_date = arrow.get(evaluations[0].timestamp, tzinfo=TIMEZONE).replace(
-            month=7, day=1, hour=0, minute=0
+            month=7, day=24, hour=0, minute=0
         )
         max_date = max(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
 
@@ -50,6 +61,7 @@ class BaseTrader:
                 for evaluation in evaluations
                 if compare_dates(arrow.get(date), arrow.get(evaluation.timestamp))
             ]
+            filtered_evaluations = filter_evaluations(evaluations)
 
             if len(filtered_evaluations) == 0:
                 continue

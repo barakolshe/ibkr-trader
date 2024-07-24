@@ -54,7 +54,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
         EClient.__init__(self, self)
         self.queues_mappings: dict[int, Queue[Any]] = {}
         self.orders_mappings: dict[int, Order] = {}
-        self.nextValidOrderId = 1
+        self.nextValidOrderId = 5600
 
     def insert_to_queue(self, data: Any, queue: Queue[Any]) -> None:
         queue.put(data)
@@ -166,10 +166,6 @@ class IBapi(EWrapper, EClient):  # type: ignore
             )
         else:
             logger.error("ERROR %s %s %s", reqId, errorCode, errorString)
-
-        if reqId in self.queues_mappings:
-            queue = self.queues_mappings[reqId]
-            self.insert_to_queue(None, queue)
 
     def historicalData(self, reqId: int, bar: Any) -> None:
         # self.logAnswer(current_fn_name(), vars())

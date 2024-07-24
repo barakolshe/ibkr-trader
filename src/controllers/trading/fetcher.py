@@ -43,13 +43,6 @@ def get_actions(exchanges: list[str], all: bool) -> list[Evaluation]:
             {"$set": {"did_trade": True}},
         )
 
-    filtered_documents: list[Any] = []
-    for document in documents_list:
-        if document["ticker"] not in [
-            filtered_document["ticker"] for filtered_document in filtered_documents
-        ]:
-            filtered_documents.append(document)
-
     return [
         Evaluation(
             ticker=doc["ticker"],
@@ -57,5 +50,5 @@ def get_actions(exchanges: list[str], all: bool) -> list[Evaluation]:
             timestamp=arrow.get(doc["date"]).to("US/Eastern").datetime,
             url=doc["url"],
         )
-        for doc in filtered_documents
+        for doc in documents_list
     ]
