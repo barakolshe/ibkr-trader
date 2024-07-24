@@ -1187,6 +1187,6 @@ class PaperStrategy(BaseStrategy):
         self, price: float, order_type: OrderType, precision: Decimal
     ) -> float:
         if order_type == OrderType.BUY:
-            return self.get_price(max(price * 1.003, price + 0.03), precision=precision)
+            return self.get_price(max(price * 1.002, price + 0.03), precision=precision)
         else:
-            return self.get_price(min(price * 0.997, price - 0.03), precision=precision)
+            return self.get_price(min(price * 0.998, price - 0.03), precision=precision)
