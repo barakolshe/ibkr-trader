@@ -61,7 +61,7 @@ class BaseTrader:
                 for evaluation in evaluations
                 if compare_dates(arrow.get(date), arrow.get(evaluation.timestamp))
             ]
-            filtered_evaluations = filter_evaluations(evaluations)
+            filtered_evaluations = filter_evaluations(filtered_evaluations)
 
             if len(filtered_evaluations) == 0:
                 continue
