@@ -77,7 +77,7 @@ def live_trade_loop() -> None:
         logger.info(f"Now date {now_date}, ")
         if now_date < get_start_datetime(now_date).shift(minutes=-4):
             logger.info(
-                f"Sleeping {(now_date.datetime - get_start_datetime(now_date).shift(minutes=-4).datetime).seconds // 60} minutes"
+                f"Sleeping {(get_start_datetime(now_date).shift(minutes=-4).datetime - now_date.datetime).seconds // 60} minutes"
             )
             if not sleep_until(get_start_datetime(now_date).shift(minutes=-4)):
                 return
