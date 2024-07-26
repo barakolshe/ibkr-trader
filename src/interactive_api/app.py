@@ -167,6 +167,10 @@ class IBapi(EWrapper, EClient):  # type: ignore
         else:
             logger.error("ERROR %s %s %s", reqId, errorCode, errorString)
 
+        if reqId in self.queues_mappings and reqId not in self.orders_mappings:
+            queue = self.queues_mappings[reqId]
+            queue.put(None)
+
     def historicalData(self, reqId: int, bar: Any) -> None:
         # self.logAnswer(current_fn_name(), vars())
         queue = self.queues_mappings[reqId]
