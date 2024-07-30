@@ -41,7 +41,7 @@ class BaseTrader:
         cash: float = 40000
         # min_date = min(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
         min_date = arrow.get(evaluations[0].timestamp, tzinfo=TIMEZONE).replace(
-            month=7, day=24, hour=0, minute=0
+            month=7, day=1, hour=0, minute=0
         )
         max_date = max(*[arrow.get(evaluation.timestamp) for evaluation in evaluations])
 

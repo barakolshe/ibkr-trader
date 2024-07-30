@@ -248,7 +248,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
         stop_loss_order = self.place_order(
             contract=contract,
             action=OrderType.SELL if action == OrderType.BUY else OrderType.BUY,
-            orderType="STP LMT",
+            orderType="STP PRT",
             totalQuantity=quantity,
             auxPrice=stop_loss_price,
             lmtPrice=stop_loss_limit_price,
