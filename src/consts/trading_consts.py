@@ -20,8 +20,8 @@ def get_end_datetime(date: datetime | arrow.Arrow) -> arrow.Arrow:
 
 # Important
 
-STOP_LOSS = 0.008
-TARGET_PROFIT = 0.012
+STOP_LOSS = 0.015
+TARGET_PROFIT = 0.04
 CHOSEN_STOCKS_AMOUNT = 2
 MINIMUM_SHARE_PRICE = 8
 
