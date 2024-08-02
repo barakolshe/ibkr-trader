@@ -1162,7 +1162,7 @@ class PaperStrategy(BaseStrategy):
             data_manager.market_order = self.app.place_order(
                 contract,
                 action=OrderType.SELL,
-                orderType="MKT PRT",
+                orderType="LMT",
                 totalQuantity=abs(data_manager.position_size),
                 lmtPrice=self.get_price_with_deviation(
                     data_manager.realdata["close"].iloc[-1],
@@ -1174,7 +1174,7 @@ class PaperStrategy(BaseStrategy):
             data_manager.market_order = self.app.place_order(
                 contract,
                 action=OrderType.BUY,
-                orderType="MKT PRT",
+                orderType="LMT",
                 totalQuantity=abs(data_manager.position_size),
                 lmtPrice=self.get_price_with_deviation(
                     data_manager.realdata["close"].iloc[-1],
