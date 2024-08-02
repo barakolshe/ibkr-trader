@@ -125,6 +125,8 @@ class DataManager(BaseModel):
 
 
 def complete_missing_minutes(df: DataFrame, freq: str) -> DataFrame:
+    if df.empty:
+        return df
     complete_index = pd.date_range(
         start=df.index[0],
         end=df.index[-1],
