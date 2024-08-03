@@ -173,7 +173,7 @@ class BaseStrategy:
         initial_cash: Optional[float] = None,
     ) -> None:
         self.app = IBapi(nextValidOrderId=next_valid_order_id)
-        self.app.connect("127.0.0.1", 4002, 37)
+        self.app.connect("127.0.0.1", 4002, randint(0, 100))
         self.ib_app_thread = Thread(target=self.app.run, daemon=True)
         self.ib_app_thread.start()
         self.today = today
