@@ -17,7 +17,6 @@ from pydantic import BaseModel, ConfigDict
 from consts.time_consts import AWARE_DATETIME_FORMATTING, DATETIME_FORMATTING
 from consts.trading_consts import CHOSEN_STOCKS_AMOUNT
 from logger.logger import logger
-from utils.math_utils import D
 
 
 class OrderType(Enum):
@@ -50,11 +49,11 @@ class IBapi(EWrapper, EClient):  # type: ignore
 
     order_counter: int = 0
 
-    def __init__(self) -> None:
-        EClient.__init__(self, self)
+    def __init__(self, nextValidOrderId: int = 1) -> None:
+        EClient.__init__(self)
         self.queues_mappings: dict[int, Queue[Any]] = {}
         self.orders_mappings: dict[int, Order] = {}
-        self.nextValidOrderId = 5600
+        self.nextValidOrderId = nextValidOrderId
 
     def insert_to_queue(self, data: Any, queue: Queue[Any]) -> None:
         queue.put(data)

@@ -168,10 +168,11 @@ class BaseStrategy:
     def __init__(
         self,
         today: datetime,
+        next_valid_order_id: int,
         is_testing: bool = False,
         initial_cash: Optional[float] = None,
     ) -> None:
-        self.app = IBapi()
+        self.app = IBapi(nextValidOrderId=next_valid_order_id)
         self.app.connect("127.0.0.1", 4002, 37)
         self.ib_app_thread = Thread(target=self.app.run, daemon=True)
         self.ib_app_thread.start()
@@ -188,7 +189,7 @@ class BaseStrategy:
             self.cash = initial_cash
             self.fake_cash = initial_cash
 
-    def main_loop(self, evaluations: list[Evaluation]) -> None:
+    def main_loop(self, evaluations: list[Evaluation]) -> int:
         for evaluation in evaluations:
             min_tick = self.ibwrapper.get_min_tick_blocking(evaluation)
             does_file_exist = os.path.exists(
@@ -215,8 +216,10 @@ class BaseStrategy:
         self.iterate_queues()
         if self.fake_cash is not None:
             self.cash = self.fake_cash
+        next_valid_order_id = self.app.nextValidOrderId
         self.app.disconnect()
         self.ib_app_thread.join()
+        return next_valid_order_id
 
     def get_past_data(self) -> None:
         for data_manager in self.data_managers:

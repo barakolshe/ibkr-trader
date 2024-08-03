@@ -51,7 +51,7 @@ def test_strategy() -> None:
     base_trader.test_strategy(evaluations)
 
 
-def live_trade() -> None:
+def live_trade(next_valid_order_id: int) -> int:
     evaluations = get_actions(exchanges=US_EXCHANGES, all=False)
     filtered_evaluations = [
         evaluation
@@ -63,14 +63,17 @@ def live_trade() -> None:
     strategy = PaperStrategy(
         arrow.now(tz=TIMEZONE)
         .replace(hour=0, minute=0, second=0, microsecond=0)
-        .datetime
+        .datetime,
+        next_valid_order_id,
     )
     logger.info("Starting main loop")
-    strategy.main_loop(filtered_evaluations)
+    next_valid_order_id = strategy.main_loop(filtered_evaluations)
+    return next_valid_order_id
 
 
 def live_trade_loop() -> None:
     logger.info("Running")
+    next_valid_order_id = 1
     while True:
         now_date = arrow.now(tz=TIMEZONE)
         days_shift = 7 - now_date.weekday() if now_date.weekday() > 5 else 1
@@ -81,7 +84,7 @@ def live_trade_loop() -> None:
             )
             if not sleep_until(get_start_datetime(now_date).shift(minutes=-4)):
                 return
-            live_trade()
+            next_valid_order_id = live_trade(next_valid_order_id)
         if not sleep_until(
             get_start_datetime(now_date).shift(minutes=-10, days=days_shift)
         ):
