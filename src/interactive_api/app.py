@@ -1,17 +1,18 @@
+import logging
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-import logging
 from queue import Queue
 from typing import Any, Optional
-from ibapi.client import EClient
-from ibapi.wrapper import EWrapper
-from ibapi.utils import current_fn_name
+
 import arrow
-from ibapi.order import Order as IBOrder
-from ibapi.contract import Contract
+from ibapi.client import EClient
 from ibapi.common import TickAttrib, TickerId
+from ibapi.contract import Contract
+from ibapi.order import Order as IBOrder
 from ibapi.ticktype import TickType
+from ibapi.utils import current_fn_name
+from ibapi.wrapper import EWrapper
 from pydantic import BaseModel, ConfigDict
 
 from consts.time_consts import AWARE_DATETIME_FORMATTING, DATETIME_FORMATTING
@@ -50,7 +51,7 @@ class IBapi(EWrapper, EClient):  # type: ignore
     order_counter: int = 0
 
     def __init__(self, nextValidOrderId: int = 1) -> None:
-        EClient.__init__(self)
+        EClient.__init__(self, self)
         self.queues_mappings: dict[int, Queue[Any]] = {}
         self.orders_mappings: dict[int, Order] = {}
         self.nextValidOrderId = nextValidOrderId
